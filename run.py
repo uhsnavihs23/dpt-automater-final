@@ -243,8 +243,8 @@ model_6d = genai.GenerativeModel("gemini-1.5-flash")
 
 def remove_nukta(text: str) -> str:
     replacements = {
-        "क़": "क", "ख़": "ख", "ग़": "ग", "ज़": "ज",
-        "फ़": "फ", "ऱ": "र", "ऩ": "न"
+        "क़": "क", "ख़": "ख", "ग़": "ग", "ज़": "ज", 
+        "ड़": "ड", "ढ़": "ढ", "फ़": "फ", "ऱ": "र", "ऩ": "न"
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
@@ -254,29 +254,54 @@ def refine_text(cleaned_text):
     prompt = f"""
 नीचे दिया गया समाचार पहले से साफ है। इसे पेशेवर, संक्षिप्त और प्रवाहपूर्ण रिपोर्टिंग शैली में परिष्कृत करें।
 
+निर्देश:
+- आउटपुट हमेशा **एक ही अनुच्छेद** (1–3 वाक्य) में दें।
+- समाचार में जो काल (भूतकाल, वर्तमानकाल, भविष्यकाल) दिया गया है, उसे **बिना बदले वैसा ही रखें**।
+  * यदि घटना आने वाली है (जैसे "करेंगे", "जाएंगे"), तो उसे भविष्यकाल में ही लिखें।
+  * यदि घटना पूरी हो चुकी है, तो भूतकाल रखें।
+- केवल उन्हीं तथ्यों का उपयोग करें जो इनपुट टेक्स्ट में हैं।
+  * कोई अनुमान या नया परिणाम न जोड़ें।
+- सप्ताह का दिन और स्थान से शुरुआत केवल तभी करें, जब समाचार किसी विशेष कार्यक्रम, बयान या सुनवाई से जुड़ा हो। अन्य समाचारों में दिन का उल्लेख न करें।
+- व्यक्तियों के नाम पर उपसर्ग:
+   * हिंदू पुरुष → "श्री"
+   * हिंदू महिला → "श्रीमती" या "सुश्री"
+   * दिवंगत → "स्व. श्री" / "स्व. श्रीमती"
+   * अन्य धर्म → कोई उपसर्ग नहीं
+- राजनीतिक दलों को केवल संक्षिप्त नाम से लिखें: सपा, भाजपा, कांग्रेस, बसपा, आप, आजाद समाज पार्टी।
+- वाक्य संरचना साफ और तार्किक हो। दो बिंदुओं को जोड़ते समय उचित संयोजक ("साथ ही", "इसके अलावा") का प्रयोग करें। सेमीकोलन का प्रयोग न करें।
+- केवल आवश्यक शब्दों का प्रयोग करें।
+- हिंदी व्याकरण और वर्तनी शुद्ध हो।
+- नुक्ता केवल फारसी/उर्दू मूल शब्दों से हटाएँ (ज़→ज, फ़→फ), लेकिन हिंदी मूल शब्द जैसे "करोड़" में नुक्ता बना रहें।
+- केवल परिष्कृत समाचार लौटाएँ, कोई अतिरिक्त टिप्पणी नहीं।
+
+समाचार:
+
 {cleaned_text}
 """
     max_retries = 3
     for attempt in range(max_retries):
         try:
             resp = model_6d.generate_content(prompt)
-            refined = remove_nukta(resp.text.strip())
-            refined = " ".join(refined.split())
+            refined = resp.text.strip()
+            refined = remove_nukta(refined)       # cleanup nukta
+            refined = " ".join(refined.split())   # collapse whitespace
             return refined
         except Exception as e:
-            err_str = str(e)
-            if "429" in err_str:
+            err_msg = str(e)
+            if "429" in err_msg:
                 print(f"⚠️ Quota exceeded on key {key_index_6d+1}, switching...")
                 switch_api_key_6d()
                 continue
-            elif "503" in err_str or "unavailable" in err_str.lower():
-                wait = min(30, 2 ** attempt)
+            elif "503" in err_msg or "unavailable" in err_msg.lower():
+                wait = min(30, 2 ** attempt)  # exponential backoff up to 30s
                 print(f"⚠️ Service unavailable (503). Retrying in {wait}s...")
                 time.sleep(wait)
                 continue
-            print(f"⚠️ Refinement API failed: {e}")
-            return cleaned_text
-    return cleaned_text
+            else:
+                print(f"⚠️ Refinement API failed: {e}")
+                return cleaned_text
+    return cleaned_text  # fallback
+
 
 def process_refinement():
     headers = worksheet.row_values(1)
