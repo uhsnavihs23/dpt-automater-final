@@ -1,31 +1,49 @@
-name: Daily Report
+name: Daily UP Political Tracker
 
 on:
   schedule:
-    - cron: '30 13 * * *'   # 13:30 UTC = 19:00 IST
-  workflow_dispatch:
+    - cron: "30 13 * * *"  # 1:30 PM UTC = 7:00 PM IST
+  workflow_dispatch:       # allow manual trigger too
 
 jobs:
-  build:
+  run-tracker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-      - name: Setup Playwright (Chromium only)
-        run: |
-          python -m playwright install chromium
-      - name: Run pipeline
+          pip install gspread oauth2client google-auth google-auth-httplib2 \
+            google-auth-oauthlib google-api-python-client google-generativeai requests pytz
+
+      - name: Run tracker
         env:
+          APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
+          CREDENTIALS_JSON_B64: ${{ secrets.CREDENTIALS_JSON_B64 }}
+          DOC_TEMPLATE_ID: ${{ secrets.DOC_TEMPLATE_ID }}
           SHEET_KEY: ${{ secrets.SHEET_KEY }}
-          GEMINI_KEY_1: ${{ secrets.GEMINI_KEY_1 }}
-          GEMINI_KEY_2: ${{ secrets.GEMINI_KEY_2 }}
-          GEMINI_KEY_3: ${{ secrets.GEMINI_KEY_3 }}
-          GEMINI_KEY_4: ${{ secrets.GEMINI_KEY_4 }}
+          MY_EMAIL: ${{ secrets.MY_EMAIL }}
+          GEMINI_KEY_6B_1: ${{ secrets.GEMINI_KEY_6B_1 }}
+          GEMINI_KEY_6B_2: ${{ secrets.GEMINI_KEY_6B_2 }}
+          GEMINI_KEY_6B_3: ${{ secrets.GEMINI_KEY_6B_3 }}
+          GEMINI_KEY_6B_4: ${{ secrets.GEMINI_KEY_6B_4 }}
+          GEMINI_KEY_6C_1: ${{ secrets.GEMINI_KEY_6C_1 }}
+          GEMINI_KEY_6C_2: ${{ secrets.GEMINI_KEY_6C_2 }}
+          GEMINI_KEY_6D_1: ${{ secrets.GEMINI_KEY_6D_1 }}
+          GEMINI_KEY_6D_2: ${{ secrets.GEMINI_KEY_6D_2 }}
+          GEMINI_KEY_6D_3: ${{ secrets.GEMINI_KEY_6D_3 }}
+          GEMINI_KEY_6D_4: ${{ secrets.GEMINI_KEY_6D_4 }}
+          GEMINI_KEY_6D_5: ${{ secrets.GEMINI_KEY_6D_5 }}
+          GEMINI_KEY_6D_6: ${{ secrets.GEMINI_KEY_6D_6 }}
+          GEMINI_KEY_6D_7: ${{ secrets.GEMINI_KEY_6D_7 }}
+          GEMINI_KEY_DOC_1: ${{ secrets.GEMINI_KEY_DOC_1 }}
+          GEMINI_KEY_DOC_2: ${{ secrets.GEMINI_KEY_DOC_2 }}
+          GEMINI_KEY_DOC_3: ${{ secrets.GEMINI_KEY_DOC_3 }}
         run: python run.py
