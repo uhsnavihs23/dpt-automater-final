@@ -244,7 +244,7 @@ model_6d = genai.GenerativeModel("gemini-1.5-flash")
 def remove_nukta(text: str) -> str:
     replacements = {
         "क़": "क", "ख़": "ख", "ग़": "ग", "ज़": "ज",
-        "ड़": "ड", "ढ़": "ढ", "फ़": "फ", "ऱ": "र", "ऩ": "न"
+        "फ़": "फ", "ऱ": "र", "ऩ": "न"
     }
     for k, v in replacements.items():
         text = text.replace(k, v)
