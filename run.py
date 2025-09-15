@@ -434,12 +434,13 @@ def generate_report():
         docs_service.documents().batchUpdate(
             documentId=doc_id, body={
                 "requests": [
-                    {"replaceAllText": {"containsText": {"text": "{{DATE}}"}, "replaceText": f"[{formatted_date}]}"},
+                    {"replaceAllText": {"containsText": {"text": "{{DATE}}"}, "replaceText": f"[{formatted_date}]" }},
                     {"replaceAllText": {"containsText": {"text": "{{POLITICAL_NEWS}}"}, "replaceText": political_block}},
                     {"replaceAllText": {"containsText": {"text": "{{GOV_NEWS}}"}, "replaceText": gov_block}},
                 ]
             }
         ).execute()
+
     except Exception as e:
         print(f"⚠️ Document text replacement failed: {e}")
 
