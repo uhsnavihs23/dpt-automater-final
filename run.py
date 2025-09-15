@@ -1,7 +1,11 @@
-# ====================================================
-# run.py – Uttar Pradesh Daily Political Tracker
-# ====================================================
-import os, time, random, base64, json, pytz, traceback, requests
+import os
+import time
+import random
+import base64
+import json
+import pytz
+import traceback
+import requests
 from datetime import datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
@@ -9,39 +13,85 @@ from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 import google.generativeai as genai
 
-# ====================================================
-# 0) Setup
-# ====================================================
+# Set timezone
 IST = pytz.timezone("Asia/Kolkata")
 
-# Decode credentials.json from GitHub Secret
-creds_json = base64.b64decode(os.getenv("CREDENTIALS_JSON_B64")).decode("utf-8")
-with open("credentials.json", "w") as f:
-    f.write(creds_json)
+# === Helper to exit with error if env var missing ===
+def get_env_var(name):
+    val = os.getenv(name)
+    if not val:
+        raise EnvironmentError(f"Missing required environment variable: {name}")
+    return val
 
-SHEET_KEY = os.getenv("SHEET_KEY")
-DOC_TEMPLATE_ID = os.getenv("DOC_TEMPLATE_ID")
-APPS_SCRIPT_URL = os.getenv("APPS_SCRIPT_URL")
-MY_EMAIL = os.getenv("MY_EMAIL")
+# === Decode credentials.json from base64 env var ===
+try:
+    creds_json_b64 = get_env_var("CREDENTIALS_JSON_B64")
+    creds_json = base64.b64decode(creds_json_b64).decode("utf-8")
+    with open("credentials.json", "w") as f:
+        f.write(creds_json)
+except Exception as e:
+    print(f"⚠️ Failed to decode/write credentials.json: {e}")
+    raise
 
-# GSpread Authentication
+# === Load environment variables ===
+SHEET_KEY = get_env_var("SHEET_KEY")
+DOC_TEMPLATE_ID = get_env_var("DOC_TEMPLATE_ID")
+APPS_SCRIPT_URL = get_env_var("APPS_SCRIPT_URL")
+MY_EMAIL = get_env_var("MY_EMAIL")
+
+# Authenticate Google Sheets API
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-gc = gspread.authorize(creds)
-sh = gc.open_by_key(SHEET_KEY)
+try:
+    creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+    gc = gspread.authorize(creds)
+    sh = gc.open_by_key(SHEET_KEY)
+except Exception as e:
+    print(f"⚠️ Google Sheets authentication failed: {e}")
+    raise
 
 today_tab = datetime.now().strftime("%Y-%m-%d")
-worksheet = sh.worksheet(today_tab)
+
+# === Ensure today's sheet exists or create it ===
+try:
+    worksheet = sh.worksheet(today_tab)
+except gspread.exceptions.WorksheetNotFound:
+    print(f"Worksheet '{today_tab}' not found, creating new worksheet.")
+    worksheet = sh.add_worksheet(title=today_tab, rows="1000", cols="20")
+    # Optionally add headers or initialization here if needed
+
 print(f"✅ Opened worksheet: {today_tab}")
 
-# ====================================================
-# 6b) Process Relevance (1/0)
-# ====================================================
+# === Batch update helper ===
+def batch_update(updates_list):
+    if not updates_list:
+        return
+    requests = []
+    for row, col, val in updates_list:
+        requests.append({
+            "updateCells": {
+                "rows": [{"values": [{"userEnteredValue": {"stringValue": str(val)}}]}],
+                "fields": "userEnteredValue",
+                "range": {
+                    "sheetId": worksheet.id,
+                    "startRowIndex": row - 1,
+                    "endRowIndex": row,
+                    "startColumnIndex": col - 1,
+                    "endColumnIndex": col
+                }
+            }
+        })
+    try:
+        worksheet.spreadsheet.batch_update({"requests": requests})
+        print(f"✅ Batch updated {len(updates_list)} cells")
+    except Exception as e:
+        print(f"⚠️ Batch update failed: {e}")
+
+# === 6b) Process Relevance (1/0) ===
 api_keys_6b = [
-    os.getenv("GEMINI_KEY_6B_1"),
-    os.getenv("GEMINI_KEY_6B_2"),
-    os.getenv("GEMINI_KEY_6B_3"),
-    os.getenv("GEMINI_KEY_6B_4"),
+    get_env_var("GEMINI_KEY_6B_1"),
+    get_env_var("GEMINI_KEY_6B_2"),
+    get_env_var("GEMINI_KEY_6B_3"),
+    get_env_var("GEMINI_KEY_6B_4"),
 ]
 key_index_6b = 0
 MAX_RAW_LEN = 3000
@@ -81,7 +131,6 @@ def process_relevance():
     idx_map = {name: headers.index(name)+1 for name in headers}
     raw_col = worksheet.col_values(idx_map["Raw"])[1:]
     relevance_col = worksheet.col_values(idx_map["Relevance"])[1:]
-
     updates_relevance, updates_runtime = [], []
     for i, raw_text in enumerate(raw_col):
         row_number = i + 2
@@ -92,23 +141,22 @@ def process_relevance():
         if existing_flag in ["0", "1"]:
             continue
         try:
+            print(f"Row {row_number} → Checking relevance...")
             flag = generate_relevance(raw_text[:MAX_RAW_LEN])
+            print(f"Row {row_number} → Relevance = {flag}")
             updates_relevance.append((row_number, idx_map["Relevance"], flag))
             updates_runtime.append((row_number, idx_map["RunTime"],
                                     datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
         except Exception:
             traceback.print_exc()
         time.sleep(BATCH_DELAY_SEC)
-
     batch_update(updates_relevance)
     batch_update(updates_runtime)
 
-# ====================================================
-# 6c) Cleaning step
-# ====================================================
+# === 6c) Cleaning step ===
 api_keys_6c = [
-    os.getenv("GEMINI_KEY_6C_1"),
-    os.getenv("GEMINI_KEY_6C_2"),
+    get_env_var("GEMINI_KEY_6C_1"),
+    get_env_var("GEMINI_KEY_6C_2"),
 ]
 key_index_6c = 0
 
@@ -140,6 +188,7 @@ def clean_text(raw_text, max_retries=3):
                 time.sleep(2 ** attempt)
                 continue
             else:
+                print(f"⚠️ Cleaning API failed: {e}")
                 break
     return raw_text[:3000]
 
@@ -149,7 +198,6 @@ def process_cleaning():
     raw_col = worksheet.col_values(idx_map["Raw"])[1:]
     relevance_col = worksheet.col_values(idx_map["Relevance"])[1:]
     cleaned_col = worksheet.col_values(idx_map["Cleaned"])[1:]
-
     updates_cleaned, updates_runtime = [], []
     for i, raw_text in enumerate(raw_col):
         row_number = i + 2
@@ -160,26 +208,27 @@ def process_cleaning():
         existing_cleaned = cleaned_col[i] if i < len(cleaned_col) else ""
         if flag != "1" or existing_cleaned:
             continue
-        cleaned_text = clean_text(raw_text[:3000])
-        updates_cleaned.append((row_number, idx_map["Cleaned"], cleaned_text))
-        updates_runtime.append((row_number, idx_map["RunTime"],
-                                datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
+        try:
+            print(f"Row {row_number} → Cleaning...")
+            cleaned_text = clean_text(raw_text[:3000])
+            updates_cleaned.append((row_number, idx_map["Cleaned"], cleaned_text))
+            updates_runtime.append((row_number, idx_map["RunTime"],
+                                    datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
+        except Exception:
+            traceback.print_exc()
         time.sleep(2)
-
     batch_update(updates_cleaned)
     batch_update(updates_runtime)
 
-# ====================================================
-# 6d) Refine step
-# ====================================================
+# === 6d) Refine step ===
 api_keys_6d = [
-    os.getenv("GEMINI_KEY_6D_1"),
-    os.getenv("GEMINI_KEY_6D_2"),
-    os.getenv("GEMINI_KEY_6D_3"),
-    os.getenv("GEMINI_KEY_6D_4"),
-    os.getenv("GEMINI_KEY_6D_5"),
-    os.getenv("GEMINI_KEY_6D_6"),
-    os.getenv("GEMINI_KEY_6D_7"),
+    get_env_var("GEMINI_KEY_6D_1"),
+    get_env_var("GEMINI_KEY_6D_2"),
+    get_env_var("GEMINI_KEY_6D_3"),
+    get_env_var("GEMINI_KEY_6D_4"),
+    get_env_var("GEMINI_KEY_6D_5"),
+    get_env_var("GEMINI_KEY_6D_6"),
+    get_env_var("GEMINI_KEY_6D_7"),
 ]
 key_index_6d = 0
 
@@ -193,7 +242,10 @@ genai.configure(api_key=api_keys_6d[key_index_6d])
 model_6d = genai.GenerativeModel("gemini-1.5-flash")
 
 def remove_nukta(text: str) -> str:
-    replacements = {"क़":"क","ख़":"ख","ग़":"ग","ज़":"ज","ड़":"ड","ढ़":"ढ","फ़":"फ","ऱ":"र","ऩ":"न"}
+    replacements = {
+        "क़": "क", "ख़": "ख", "ग़": "ग", "ज़": "ज",
+        "ड़": "ड", "ढ़": "ढ", "फ़": "फ", "ऱ": "र", "ऩ": "न"
+    }
     for k, v in replacements.items():
         text = text.replace(k, v)
     return text
@@ -201,6 +253,7 @@ def remove_nukta(text: str) -> str:
 def refine_text(cleaned_text):
     prompt = f"""
 नीचे दिया गया समाचार पहले से साफ है। इसे पेशेवर, संक्षिप्त और प्रवाहपूर्ण रिपोर्टिंग शैली में परिष्कृत करें।
+
 {cleaned_text}
 """
     max_retries = 3
@@ -211,12 +264,17 @@ def refine_text(cleaned_text):
             refined = " ".join(refined.split())
             return refined
         except Exception as e:
-            if "429" in str(e):
+            err_str = str(e)
+            if "429" in err_str:
+                print(f"⚠️ Quota exceeded on key {key_index_6d+1}, switching...")
                 switch_api_key_6d()
                 continue
-            elif "503" in str(e):
-                time.sleep(min(30, 2 ** attempt))
+            elif "503" in err_str or "unavailable" in err_str.lower():
+                wait = min(30, 2 ** attempt)
+                print(f"⚠️ Service unavailable (503). Retrying in {wait}s...")
+                time.sleep(wait)
                 continue
+            print(f"⚠️ Refinement API failed: {e}")
             return cleaned_text
     return cleaned_text
 
@@ -226,7 +284,6 @@ def process_refinement():
     cleaned_col = worksheet.col_values(idx_map["Cleaned"])[1:]
     refined_col = worksheet.col_values(idx_map["Refined"])[1:]
     relevance_col = worksheet.col_values(idx_map["Relevance"])[1:]
-
     updates_refined, updates_runtime = [], []
     for i, cleaned_text in enumerate(cleaned_col):
         row_number = i + 2
@@ -235,48 +292,23 @@ def process_refinement():
         existing_refined = refined_col[i] if i < len(refined_col) else ""
         if not cleaned_text or flag != "1" or existing_refined:
             continue
-        refined_text = refine_text(cleaned_text[:3000])
-        updates_refined.append((row_number, idx_map["Refined"], refined_text))
-        updates_runtime.append((row_number, idx_map["RunTime"],
-                                datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
+        try:
+            print(f"Row {row_number} → Refining...")
+            refined_text = refine_text(cleaned_text[:3000])
+            updates_refined.append((row_number, idx_map["Refined"], refined_text))
+            updates_runtime.append((row_number, idx_map["RunTime"],
+                                    datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
+        except Exception:
+            traceback.print_exc()
         time.sleep(2)
-
     batch_update(updates_refined)
     batch_update(updates_runtime)
 
-# ====================================================
-# Helper: Batch update
-# ====================================================
-def batch_update(updates_list):
-    if not updates_list:
-        return
-    requests = []
-    for row, col, val in updates_list:
-        requests.append({
-            "updateCells": {
-                "rows": [{"values": [{"userEnteredValue": {"stringValue": str(val)}}]}],
-                "fields": "userEnteredValue",
-                "range": {
-                    "sheetId": worksheet.id,
-                    "startRowIndex": row - 1,
-                    "endRowIndex": row,
-                    "startColumnIndex": col - 1,
-                    "endColumnIndex": col
-                }
-            }
-        })
-    try:
-        worksheet.spreadsheet.batch_update({"requests": requests})
-    except Exception as e:
-        print(f"⚠️ Batch update failed: {e}")
-
-# ====================================================
-# 7) Generate Google Doc Report
-# ====================================================
+# === 7) Generate Google Doc Report ===
 api_keys_doc = [
-    os.getenv("GEMINI_KEY_DOC_1"),
-    os.getenv("GEMINI_KEY_DOC_2"),
-    os.getenv("GEMINI_KEY_DOC_3"),
+    get_env_var("GEMINI_KEY_DOC_1"),
+    get_env_var("GEMINI_KEY_DOC_2"),
+    get_env_var("GEMINI_KEY_DOC_3"),
 ]
 key_index_doc = 0
 
@@ -289,18 +321,49 @@ def get_next_model_doc():
 
 def categorize_and_clean(news_list):
     model = get_next_model_doc()
-    prompt = "समाचारों को राजनीतिक और गवर्नेंस श्रेणियों में बाँटें, और चयनित शब्दों को **बोल्ड** करें।"
+    prompt = f"""
+आपको उत्तर प्रदेश की समाचार बिंदुओं की सूची दी जा रही है।
+कृपया:
+1. समाचारों को दो श्रेणियों में बाँटें:
+   - महत्वपूर्ण राजनीतिक गतिविधियां
+   - महत्वपूर्ण गवर्नेंस गतिविधियां
+2. प्रत्येक बिंदु नई लाइन से लिखें (कोई ● या बुलेट नहीं)।
+3. चयनित शब्दों को **बोल्ड** करें:
+   - व्यक्तियों के नाम और उपसर्ग (श्री, श्रीमती, सुश्री आदि)
+   - पदनाम (मुख्यमंत्री, सांसद, विधायक आदि)
+   - स्थान (शहर/जिला/राज्य)
+   - मुख्य क्रियात्मक शब्द
+4. आउटपुट फॉर्मेट इस प्रकार दें:
+महत्वपूर्ण राजनीतिक गतिविधियां:
+<समाचार>
+
+महत्वपूर्ण गवर्नेंस गतिविधियां:
+<समाचार>
+"""
     resp = model.generate_content(prompt + "\n\n".join(news_list))
     return resp.text.strip()
 
 def final_qc(news_list):
     model = get_next_model_doc()
-    prompt = "केवल व्याकरण और भाषा सुधारें, तथ्य जस के तस रखें।"
+    prompt = """
+आपको समाचार बिंदुओं की सूची दी जा रही है।
+कृपया केवल भाषा और व्याकरण की गुणवत्ता सुधारें:
+- अनावश्यक अंग्रेज़ी शब्दों को हटाएँ और हिंदी में बदलें
+- गलत सेमीकोलन/कॉमा को सही पूर्णविराम या उपयुक्त चिह्न में बदलें
+- वाक्यों को स्पष्ट और स्वाभाविक बनाएं
+- **किसी भी तथ्य/अर्थ को न बदलें**
+- आउटपुट प्रत्येक बिंदु अलग लाइन में दें, **बोल्ड मार्किंग जस की तस रखें**
+- आउटपुट में केवल समाचार बिंदु ही दें, कोई भी भूमिका, स्पष्टीकरण या अतिरिक्त वाक्य न लिखें
+"""
     resp = model.generate_content(prompt + "\n\n".join(news_list))
     return resp.text.strip().splitlines()
 
 def remove_filler_lines(lines):
-    bad_phrases = ["यहां आपके द्वारा दिए गए", "यह समाचार बिंदुओं"]
+    bad_phrases = [
+        "यहां आपके द्वारा दिए गए समाचार बिंदुओं के सुधारित संस्करण हैं",
+        "यह समाचार बिंदुओं का संशोधित संस्करण है",
+        "यह आपके समाचार बिंदुओं का संक्षिप्त रूप है"
+    ]
     return [l.strip() for l in lines if l.strip() and not any(bad in l for bad in bad_phrases)]
 
 def generate_report():
@@ -308,18 +371,25 @@ def generate_report():
     idx_map = {name: headers.index(name)+1 for name in headers}
     refined_col = worksheet.col_values(idx_map["Refined"])[1:]
     refined_news = [r.strip() for r in refined_col if r.strip()]
+
     if not refined_news:
         print("⚠️ No refined news found!")
         return
-    categorized_text = categorize_and_clean(refined_news)
 
-    # Split sections
+    categorized_text = categorize_and_clean(refined_news)
     political_text, gov_text, section = [], [], None
     for line in categorized_text.splitlines():
-        if "महत्वपूर्ण राजनीतिक गतिविधियां" in line: section="political"; continue
-        elif "महत्वपूर्ण गवर्नेंस गतिविधियां" in line: section="gov"; continue
+        if "महत्वपूर्ण राजनीतिक गतिविधियां" in line:
+            section = "political"
+            continue
+        elif "महत्वपूर्ण गवर्नेंस गतिविधियां" in line:
+            section = "gov"
+            continue
         elif line.strip():
-            (political_text if section=="political" else gov_text).append(line.strip())
+            if section == "political":
+                political_text.append(line.strip())
+            elif section == "gov":
+                gov_text.append(line.strip())
 
     political_text = remove_filler_lines(final_qc(political_text))
     gov_text = remove_filler_lines(final_qc(gov_text))
@@ -327,61 +397,97 @@ def generate_report():
     political_block = "\n".join(political_text) if political_text else "—"
     gov_block = "\n".join(gov_text) if gov_text else "—"
 
-    # Docs + Drive
-    creds = Credentials.from_service_account_file("credentials.json", scopes=[
-        "https://www.googleapis.com/auth/documents",
-        "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/spreadsheets"
-    ])
-    docs_service = build("docs", "v1", credentials=creds)
-    drive_service = build("drive", "v3", credentials=creds)
+    try:
+        creds = Credentials.from_service_account_file("credentials.json", scopes=[
+            "https://www.googleapis.com/auth/documents",
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/spreadsheets"
+        ])
+        docs_service = build("docs", "v1", credentials=creds)
+        drive_service = build("drive", "v3", credentials=creds)
+    except Exception as e:
+        print(f"⚠️ Google Docs/Drive authentication failed: {e}")
+        return
 
     today_date_str = datetime.now().strftime("%Y%m%d")
     new_doc_title = f"{today_date_str} Uttar Pradesh Daily Political Tracker"
-    new_doc = drive_service.files().copy(fileId=DOC_TEMPLATE_ID, body={"name": new_doc_title}).execute()
-    doc_id = new_doc.get("id")
-    doc_link = f"https://docs.google.com/document/d/{doc_id}/edit"
 
-    # Share with your email
-    drive_service.permissions().create(fileId=doc_id, body={'type': 'user', 'role': 'writer', 'emailAddress': MY_EMAIL}).execute()
+    try:
+        new_doc = drive_service.files().copy(fileId=DOC_TEMPLATE_ID, body={"name": new_doc_title}).execute()
+        doc_id = new_doc.get("id")
+        doc_link = f"https://docs.google.com/document/d/{doc_id}/edit"
+    except Exception as e:
+        print(f"⚠️ Google Drive file copy failed: {e}")
+        return
 
-    # Replace placeholders
+    try:
+        drive_service.permissions().create(
+            fileId=doc_id,
+            body={'type': 'user', 'role': 'writer', 'emailAddress': MY_EMAIL},
+            fields='id'
+        ).execute()
+    except Exception as e:
+        print(f"⚠️ Sharing doc failed: {e}")
+
     formatted_date = datetime.now().strftime("%B %dth, %Y")
-    docs_service.documents().batchUpdate(documentId=doc_id, body={
-        "requests": [
-            {"replaceAllText": {"containsText": {"text": "{{DATE}}"}, "replaceText": f"[{formatted_date}]"}},
-            {"replaceAllText": {"containsText": {"text": "{{POLITICAL_NEWS}}"}, "replaceText": political_block}},
-            {"replaceAllText": {"containsText": {"text": "{{GOV_NEWS}}"}, "replaceText": gov_block}}
-        ]
-    }).execute()
+    try:
+        docs_service.documents().batchUpdate(
+            documentId=doc_id, body={
+                "requests": [
+                    {"replaceAllText": {"containsText": {"text": "{{DATE}}"}, "replaceText": f"[{formatted_date}]}"},
+                    {"replaceAllText": {"containsText": {"text": "{{POLITICAL_NEWS}}"}, "replaceText": political_block}},
+                    {"replaceAllText": {"containsText": {"text": "{{GOV_NEWS}}"}, "replaceText": gov_block}},
+                ]
+            }
+        ).execute()
+    except Exception as e:
+        print(f"⚠️ Document text replacement failed: {e}")
 
-    # Apps Script call to apply bolds
-    resp = requests.post(APPS_SCRIPT_URL, data={"docId": doc_id})
-    print("Apps Script:", resp.text)
+    # Call Apps Script to apply bold formatting on markers
+    try:
+        resp = requests.post(APPS_SCRIPT_URL, data={"docId": doc_id})
+        print("Apps Script processing:", resp.text)
+    except Exception as e:
+        print(f"⚠️ Apps Script call failed: {e}")
+
     print(f"✅ Report generated: {doc_link}")
 
-    # Save to Repository tab
+    # Save link in Repository tab
     try:
         repo_ws = sh.worksheet("Repository")
     except gspread.exceptions.WorksheetNotFound:
         repo_ws = sh.add_worksheet(title="Repository", rows="1000", cols="2")
         repo_ws.insert_row(["Link", "DateCreated"], 1)
+
     ist_now = datetime.now(tz=IST)
-    repo_ws.append_row([doc_link, ist_now.strftime("%I:%M %p · %d %b, %Y")])
+    try:
+        repo_ws.append_row([doc_link, ist_now.strftime("%I:%M %p · %d %b, %Y")])
+        print("✅ Link saved to Repository tab")
+    except Exception as e:
+        print(f"⚠️ Failed to save link to repository: {e}")
 
+# === MAIN PIPELINE ===
+def main():
+    try:
+        process_relevance()
+        process_cleaning()
+        process_refinement()
+    except Exception as e:
+        print(f"⚠️ Error in processing pipeline: {e}")
+        traceback.print_exc()
 
-# ====================================================
-# MAIN PIPELINE
-# ====================================================
-process_relevance()
-process_cleaning()
-process_refinement()
+    print("⏳ Waiting for Sheets to sync updates...")
+    time.sleep(5)  # Allow Google Sheets to sync
 
-# ✅ Ensure Sheets has applied all writes before generating Doc
-print("⏳ Waiting for Sheets to sync updates...")
-time.sleep(5)
+    # Refresh worksheet for latest refined content
+    global worksheet
+    worksheet = sh.worksheet(today_tab)
 
-# ✅ Re-open worksheet to pull latest Refined values
-worksheet = sh.worksheet(today_tab)
+    try:
+        generate_report()
+    except Exception as e:
+        print(f"⚠️ Error generating report: {e}")
+        traceback.print_exc()
 
-generate_report()
+if __name__ == "__main__":
+    main()
