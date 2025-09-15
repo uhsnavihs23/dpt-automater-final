@@ -303,6 +303,22 @@ def remove_filler_lines(lines):
     bad_phrases = ["यहां आपके द्वारा दिए गए", "यह समाचार बिंदुओं"]
     return [l.strip() for l in lines if l.strip() and not any(bad in l for bad in bad_phrases)]
 
+# ====================================================
+# MAIN PIPELINE
+# ====================================================
+process_relevance()
+process_cleaning()
+process_refinement()
+
+# ✅ Ensure Sheets has applied all writes before generating Doc
+print("⏳ Waiting for Sheets to sync updates...")
+time.sleep(5)
+
+# ✅ Re-open worksheet to pull latest Refined values
+worksheet = sh.worksheet(today_tab)
+
+generate_report()
+
 def generate_report():
     headers = worksheet.row_values(1)
     idx_map = {name: headers.index(name)+1 for name in headers}
