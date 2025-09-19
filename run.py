@@ -339,7 +339,6 @@ api_keys_doc = [
     get_env_var("GEMINI_KEY_DOC_3"),
 ]
 key_index_doc = 0
-
 def get_next_model_doc():
     global key_index_doc
     genai.configure(api_key=api_keys_doc[key_index_doc])
@@ -355,7 +354,7 @@ def categorize_and_clean(news_list):
 1. समाचारों को दो श्रेणियों में बाँटें:
    - महत्वपूर्ण राजनीतिक गतिविधियां
    - महत्वपूर्ण गवर्नेंस गतिविधियां
-2. प्रत्येक बिंदु नई लाइन से लिखें (कोई ● या बुलेट नहीं)।
+2. प्रत्येक बिंदु पूरी तरह से एक पैराग्राफ में लिखें, कोई ● या बुलेट न लगाएँ और न ही बीच में पंक्ति विभाजन करें।
 3. चयनित शब्दों को **बोल्ड** करें:
    - व्यक्तियों के नाम और उपसर्ग (श्री, श्रीमती, सुश्री आदि)
    - पदनाम (मुख्यमंत्री, सांसद, विधायक आदि)
@@ -365,7 +364,6 @@ def categorize_and_clean(news_list):
 4. आउटपुट फॉर्मेट इस प्रकार दें:
 महत्वपूर्ण राजनीतिक गतिविधियां:
 <समाचार>
-
 महत्वपूर्ण गवर्नेंस गतिविधियां:
 <समाचार>
 """
@@ -381,11 +379,13 @@ def final_qc(news_list):
 - गलत सेमीकोलन/कॉमा को सही पूर्णविराम या उपयुक्त चिह्न में बदलें
 - वाक्यों को स्पष्ट और स्वाभाविक बनाएं
 - **किसी भी तथ्य/अर्थ को न बदलें**
-- आउटपुट प्रत्येक बिंदु अलग लाइन में दें, **बोल्ड मार्किंग जस की तस रखें**
+- आउटपुट प्रत्येक समाचार को एक पैराग्राफ के रूप में दें, **बोल्ड मार्किंग जस की तस रखें**
 - आउटपुट में केवल समाचार बिंदु ही दें, कोई भी भूमिका, स्पष्टीकरण या अतिरिक्त वाक्य न लिखें
 """
     resp = model.generate_content(prompt + "\n\n".join(news_list))
-    return resp.text.strip().splitlines()
+    # Split by double newline to preserve paragraphs intact
+    paragraphs = [p.strip() for p in resp.text.strip().split('\n\n') if p.strip()]
+    return paragraphs
 
 def remove_filler_lines(lines):
     bad_phrases = [
@@ -400,7 +400,6 @@ def generate_report():
     idx_map = {name: headers.index(name)+1 for name in headers}
     refined_col = worksheet.col_values(idx_map["Refined"])[1:]
     refined_news = [r.strip() for r in refined_col if r.strip()]
-
     if not refined_news:
         print("⚠️ No refined news found!")
         return
@@ -423,8 +422,9 @@ def generate_report():
     political_text = remove_filler_lines(final_qc(political_text))
     gov_text = remove_filler_lines(final_qc(gov_text))
 
-    political_block = "\n".join(political_text) if political_text else "—"
-    gov_block = "\n".join(gov_text) if gov_text else "—"
+    # Join paragraphs with two newlines for clear paragraph breaks in Google Doc
+    political_block = "\n\n".join(political_text) if political_text else "—"
+    gov_block = "\n\n".join(gov_text) if gov_text else "—"
 
     try:
         creds = Credentials.from_service_account_file("credentials.json", scopes=[
@@ -440,7 +440,6 @@ def generate_report():
 
     today_date_str = datetime.now().strftime("%Y%m%d")
     new_doc_title = f"{today_date_str} Uttar Pradesh Daily Political Tracker"
-
     try:
         new_doc = drive_service.files().copy(fileId=DOC_TEMPLATE_ID, body={"name": new_doc_title}).execute()
         doc_id = new_doc.get("id")
@@ -469,7 +468,6 @@ def generate_report():
                 ]
             }
         ).execute()
-
     except Exception as e:
         print(f"⚠️ Document text replacement failed: {e}")
 
@@ -488,7 +486,6 @@ def generate_report():
     except gspread.exceptions.WorksheetNotFound:
         repo_ws = sh.add_worksheet(title="Repository", rows="1000", cols="2")
         repo_ws.insert_row(["Link", "DateCreated"], 1)
-
     ist_now = datetime.now(tz=IST)
     try:
         repo_ws.append_row([doc_link, ist_now.strftime("%I:%M %p · %d %b, %Y")])
@@ -505,14 +502,11 @@ def main():
     except Exception as e:
         print(f"⚠️ Error in processing pipeline: {e}")
         traceback.print_exc()
-
     print("⏳ Waiting for Sheets to sync updates...")
     time.sleep(5)  # Allow Google Sheets to sync
-
     # Refresh worksheet for latest refined content
     global worksheet
     worksheet = sh.worksheet(today_tab)
-
     try:
         generate_report()
     except Exception as e:
