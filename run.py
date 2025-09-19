@@ -426,8 +426,8 @@ def generate_report():
     gov_text = remove_filler_lines(final_qc(gov_text))
 
     # Join paragraphs with two newlines for clear paragraph breaks in Google Doc
-    political_block = "\n\n".join(political_text) if political_text else "—"
-    gov_block = "\n\n".join(gov_text) if gov_text else "—"
+    political_block = "\n".join(political_text) if political_text else "—"
+    gov_block = "\n".join(gov_text) if gov_text else "—"
 
     try:
         creds = Credentials.from_service_account_file("credentials.json", scopes=[
