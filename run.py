@@ -374,12 +374,15 @@ def final_qc(news_list):
     model = get_next_model_doc()
     prompt = """
 आपको समाचार बिंदुओं की सूची दी जा रही है।
-कृपया केवल भाषा और व्याकरण की गुणवत्ता सुधारें:
-- अनावश्यक अंग्रेज़ी शब्दों को हटाएँ और हिंदी में बदलें
+कृपया 
+- केवल भाषा और व्याकरण की गुणवत्ता सुधारें
+- अनावश्यक अंग्रेजी शब्दों को हटाएँ और हिंदी में बदलें
 - गलत सेमीकोलन/कॉमा को सही पूर्णविराम या उपयुक्त चिह्न में बदलें
 - वाक्यों को स्पष्ट और स्वाभाविक बनाएं
 - **किसी भी तथ्य/अर्थ को न बदलें**
-- आउटपुट प्रत्येक समाचार को एक पैराग्राफ के रूप में दें, **बोल्ड मार्किंग जस की तस रखें**
+- यदि कोई समाचार बिंदु एक ही व्यक्ति या नेता के एक ही स्थान पर हुई कई गतिविधियों को वर्णित करता है, तो उन्हें एक ही समाचार पैराग्राफ में संयुक्त रूप से मिलाएँ।
+- आउटपुट प्रत्येक समाचार को एक पूरा पैराग्राफ बनाएं, जहाँ सम्मिलित समाचार आपस में तार्किक और प्रवाही हों।
+- **बोल्ड मार्किंग जस की तस रखें**
 - आउटपुट में केवल समाचार बिंदु ही दें, कोई भी भूमिका, स्पष्टीकरण या अतिरिक्त वाक्य न लिखें
 """
     resp = model.generate_content(prompt + "\n\n".join(news_list))
@@ -448,14 +451,18 @@ def generate_report():
         print(f"⚠️ Google Drive file copy failed: {e}")
         return
 
-    try:
-        drive_service.permissions().create(
-            fileId=doc_id,
-            body={'type': 'user', 'role': 'writer', 'emailAddress': MY_EMAIL},
-            fields='id'
-        ).execute()
-    except Exception as e:
-        print(f"⚠️ Sharing doc failed: {e}")
+    MY_EMAIL = get_env_var("MY_EMAIL")
+    emails = [e.strip() for e in MY_EMAIL.split(",") if e.strip()]
+    for email in emails:
+        try:
+            drive_service.permissions().create(
+                fileId=doc_id,
+                body={'type': 'user', 'role': 'writer', 'emailAddress': email},
+                fields='id'
+            ).execute()
+            print(f"✅ Shared document with {email}")
+        except Exception as e:
+            print(f"⚠️ Sharing doc failed for {email}: {e}")
 
     formatted_date = datetime.now().strftime("%B %dth, %Y")
     try:
