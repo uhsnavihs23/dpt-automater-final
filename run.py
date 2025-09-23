@@ -472,6 +472,11 @@ def generate_report():
         ).execute()
     except Exception as e:
         print(f"⚠️ Document text replacement failed: {e}")
+    # --- Debug: Show what bold markers are present before Apps Script ---
+    print('----------')
+    print('GOVERNANCE BLOCK below:')
+    print(gov_block)
+    print('----------')
 
     # Call Apps Script to apply bold formatting on markers
     try:
