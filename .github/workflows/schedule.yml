@@ -2,7 +2,7 @@ name: Daily UP Political Tracker
 
 on:
   schedule:
-    - cron: "20 12 * * *"  # 12:20 PM UTC = 5:50 PM IST
+    - cron: '20 12 * * *'  # 12:20 PM UTC = 5:50 PM IST
   workflow_dispatch:       # allow manual trigger too
 
 jobs:
