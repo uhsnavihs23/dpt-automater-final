@@ -18,12 +18,16 @@ IST = pytz.timezone("Asia/Kolkata")
 
 # --- GLOBAL CONFIGURATION ---
 MAX_RAW_LEN = 3000
-BATCH_DELAY_SEC = 5 # Increased delay from 2s to 5s for better rate limit avoidance
+BATCH_DELAY_SEC = 5 # Increased delay to 5s to respect the new RPM limits (max 15 RPM)
 
 # === Helper to exit with error if env var missing ===
 def get_env_var(name):
     val = os.getenv(name)
     if not val:
+        # Check if the missing key is expected (e.g., GEMINI_KEY_6B_5 and above)
+        if name.startswith("GEMINI_KEY_"):
+             # If key is missing, return None and let the list comprehension handle the size
+             return None
         raise EnvironmentError(f"Missing required environment variable: {name}")
     return val
 
@@ -43,7 +47,7 @@ DOC_TEMPLATE_ID = get_env_var("DOC_TEMPLATE_ID")
 APPS_SCRIPT_URL = get_env_var("APPS_SCRIPT_URL")
 MY_EMAIL = get_env_var("MY_EMAIL")
 
-# Authenticate Google Sheets API
+# Authenticate Google Sheets API (Code remains the same)
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 try:
     creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
@@ -55,7 +59,7 @@ except Exception as e:
 
 today_tab = datetime.now().strftime("%Y-%m-%d")
 
-# === Ensure today's sheet exists or create it ===
+# === Ensure today's sheet exists or create it === (Code remains the same)
 try:
     worksheet = sh.worksheet(today_tab)
 except gspread.exceptions.WorksheetNotFound:
@@ -65,7 +69,7 @@ except gspread.exceptions.WorksheetNotFound:
 
 print(f"✅ Opened worksheet: {today_tab}")
 
-# === Batch update helper ===
+# === Batch update helper === (Code remains the same)
 def batch_update(updates_list):
     if not updates_list:
         return
@@ -90,80 +94,99 @@ def batch_update(updates_list):
     except Exception as e:
         print(f"⚠️ Batch update failed: {e}")
 
-# --- API Key Initialization ---
+# --- API Key Initialization & Model Name Correction ---
 
-# 6b: Relevance
-api_keys_6b = [get_env_var(f"GEMINI_KEY_6B_{i}") for i in range(1, 5)]
+# 6B: Relevance (Pool size 8, using Flash-Lite for max RPD)
+api_keys_6b = [get_env_var(f"GEMINI_KEY_6B_{i}") for i in range(1, 9) if get_env_var(f"GEMINI_KEY_6B_{i}")]
 key_index_6b = 0
-model_6b = genai.GenerativeModel("gemini-1.5-flash")
+MODEL_6B = "gemini-2.5-flash-lite" 
 
-# 6c: Cleaning
-api_keys_6c = [get_env_var(f"GEMINI_KEY_6C_{i}") for i in range(1, 3)]
+# 6C: Cleaning (Pool size 3, using Flash-Lite for max RPD)
+api_keys_6c = [get_env_var(f"GEMINI_KEY_6C_{i}") for i in range(1, 4) if get_env_var(f"GEMINI_KEY_6C_{i}")]
 key_index_6c = 0
-model_6c = genai.GenerativeModel("gemini-1.5-flash")
+MODEL_6C = "gemini-2.5-flash-lite"
 
-# 6d: Refine
-api_keys_6d = [get_env_var(f"GEMINI_KEY_6D_{i}") for i in range(1, 8)]
+# 6D: Refine (Pool size 12, using Flash for better quality)
+api_keys_6d = [get_env_var(f"GEMINI_KEY_6D_{i}") for i in range(1, 13) if get_env_var(f"GEMINI_KEY_6D_{i}")]
 key_index_6d = 0
-model_6d = genai.GenerativeModel("gemini-2.0-flash")
+MODEL_6D = "gemini-2.5-flash"
 
-# DOC: Reporting/Categorization
-api_keys_doc = [get_env_var(f"GEMINI_KEY_DOC_{i}") for i in range(1, 4)]
+# DOC: Reporting/Categorization (Pool size 3, using Flash for better quality)
+api_keys_doc = [get_env_var(f"GEMINI_KEY_DOC_{i}") for i in range(1, 4) if get_env_var(f"GEMINI_KEY_DOC_{i}")]
 key_index_doc = 0
-model_doc = genai.GenerativeModel("gemini-2.0-flash")
+MODEL_DOC = "gemini-2.5-flash"
 
 # --- API Configuration and Rotation Helpers ---
 
 def get_model_and_switch(api_key_list, key_index_ref, model_name):
     """Configures the Gemini API with the current key and returns the model."""
-    global key_index_6b, key_index_6c, key_index_6d, key_index_doc
     
-    # Check which key index to update globally
+    # Map the current global index to the mutable reference [0]
     if api_key_list is api_keys_6b:
-        key_index_ref[0] = key_index_6b
+        key_index_ref[0] = globals().get('key_index_6b', 0)
     elif api_key_list is api_keys_6c:
-        key_index_ref[0] = key_index_6c
+        key_index_ref[0] = globals().get('key_index_6c', 0)
     elif api_key_list is api_keys_6d:
-        key_index_ref[0] = key_index_6d
+        key_index_ref[0] = globals().get('key_index_6d', 0)
     elif api_key_list is api_keys_doc:
-        key_index_ref[0] = key_index_doc
+        key_index_ref[0] = globals().get('key_index_doc', 0)
     
-    # Configure the API with the current key
     current_key_index = key_index_ref[0]
     genai.configure(api_key=api_key_list[current_key_index])
     
     # Create and return the model instance
     return genai.GenerativeModel(model_name)
 
-def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, max_retries=3):
+def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, max_retries=4):
     """
     Handles API calls with key rotation and exponential backoff, specifically
-    for 429 Resource Exhausted errors.
+    for 404 Model Not Found and 429 Resource Exhausted errors.
     """
+    if not api_key_list:
+        print(f"❌ No API keys found for model {model_name}. Skipping call.")
+        return ""
+
     for attempt in range(max_retries):
         try:
             model = get_model_and_switch(api_key_list, key_index_ref, model_name)
             resp = model.generate_content(prompt)
+            
+            # Update the global index for the *next* successful call's start
+            next_index = (key_index_ref[0] + 1) % len(api_key_list)
+            if api_key_list is api_keys_6b:
+                globals()['key_index_6b'] = next_index
+            elif api_key_list is api_keys_6c:
+                globals()['key_index_6c'] = next_index
+            elif api_key_list is api_keys_6d:
+                globals()['key_index_6d'] = next_index
+            elif api_key_list is api_keys_doc:
+                globals()['key_index_doc'] = next_index
+
             return resp.text.strip()
+            
         except Exception as e:
             err_msg = str(e)
+            
+            if "404" in err_msg and "model" in err_msg.lower():
+                print(f"❌ Model Not Found Error: {model_name}. Please check the model name is correct for your account/API.")
+                return ""
             
             if "429" in err_msg or "Resource exhausted" in err_msg:
                 # 1. Quota Error: Switch key immediately
                 key_index_ref[0] = (key_index_ref[0] + 1) % len(api_key_list)
-                print(f"⚠️ Quota exceeded on key {key_index_ref[0]} pool. Switching key and waiting 60s...")
+                print(f"⚠️ Quota exceeded on key pool. Switching to key index {key_index_ref[0]} and waiting 60s...")
                 time.sleep(60) # Longer wait after rate limit error
                 continue
             
             elif "503" in err_msg or "unavailable" in err_msg.lower():
-                # 2. Service Error: Use exponential backoff, no key switch needed yet
+                # 2. Service Error: Use exponential backoff
                 wait = min(30, 2 ** attempt)
                 print(f"⚠️ Service unavailable (503). Retrying in {wait}s...")
                 time.sleep(wait)
                 continue
             
             else:
-                # 3. Other Errors: Log and fail/return empty after all retries
+                # 3. Other Errors: Use exponential backoff
                 print(f"⚠️ API call failed (attempt {attempt+1}): {e}")
                 time.sleep(2 ** attempt)
 
@@ -172,8 +195,6 @@ def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, m
 # --- 6b) Process Relevance (1/0) ---
 
 def generate_relevance(text):
-    global key_index_6b
-    
     prompt = f"""
 उत्तर प्रदेश की राजनीतिक/सरकारी गतिविधियों (दल, नेता, सरकार, विपक्ष, योजनाएँ,
 विधानसभा, लोकसभा, राजनीतिक कोर्ट केस) से संबंधित है?
@@ -181,16 +202,14 @@ def generate_relevance(text):
 
 {text}
 """
-    # Use call_gemini_with_rotation, passing key_index_6b as a mutable list/array
-    key_index_arr = [key_index_6b] 
+    key_index_arr = [0] # Placeholder for mutable index
     flag = call_gemini_with_rotation(
         prompt=prompt, 
         api_key_list=api_keys_6b, 
         key_index_ref=key_index_arr,
-        model_name="gemini-1.5-flash",
+        model_name=MODEL_6B, 
         max_retries=4
     )
-    key_index_6b = key_index_arr[0] # Update global index
     
     return "1" if flag.strip().startswith("1") else "0"
 
@@ -224,7 +243,6 @@ def process_relevance():
 # --- 6c) Cleaning step ---
 
 def clean_text(raw_text):
-    global key_index_6c
     prompt = f"""
 आपको एक ट्वीट या समाचार का कच्चा टेक्स्ट दिया गया है। आपका काम है टेक्स्ट में से **केवल मुख्य समाचार सामग्री** को निकालना है।
 
@@ -239,16 +257,15 @@ def clean_text(raw_text):
 आउटपुट में **केवल** मुख्य समाचार या कथन ही होना चाहिए।
 """ + raw_text
 
-    key_index_arr = [key_index_6c] 
+    key_index_arr = [0] 
     cleaned = call_gemini_with_rotation(
         prompt=prompt, 
         api_key_list=api_keys_6c, 
         key_index_ref=key_index_arr,
-        model_name="gemini-1.5-flash",
+        model_name=MODEL_6C, 
         max_retries=4
     )
-    key_index_6c = key_index_arr[0] # Update global index
-
+    
     return cleaned or raw_text[:3000] # Fallback to raw text if empty
 
 def process_cleaning():
@@ -291,7 +308,6 @@ def remove_nukta(text: str) -> str:
     return text
 
 def refine_text(cleaned_text):
-    global key_index_6d
     prompt = f"""
 नीचे दिया गया समाचार पहले से साफ है। इसे पेशेवर, संक्षिप्त और प्रवाहपूर्ण रिपोर्टिंग शैली में परिष्कृत करें।
 निर्देश:
@@ -321,15 +337,14 @@ def refine_text(cleaned_text):
 
 {cleaned_text}
 """
-    key_index_arr = [key_index_6d] 
+    key_index_arr = [0] 
     refined = call_gemini_with_rotation(
         prompt=prompt, 
         api_key_list=api_keys_6d, 
         key_index_ref=key_index_arr,
-        model_name="gemini-2.0-flash",
+        model_name=MODEL_6D,
         max_retries=4
     )
-    key_index_6d = key_index_arr[0] # Update global index
 
     if refined:
         refined = remove_nukta(refined) # cleanup nukta
@@ -337,6 +352,7 @@ def refine_text(cleaned_text):
         return refined
     
     return cleaned_text # fallback
+
 
 def process_refinement():
     headers = worksheet.row_values(1)
@@ -367,7 +383,6 @@ def process_refinement():
 # --- 7) Generate Google Doc Report ---
 
 def categorize_and_clean(news_list):
-    global key_index_doc
     prompt = f"""
 आपको उत्तर प्रदेश की समाचार बिंदुओं की सूची दी जा रही है।
 कृपया:
@@ -388,20 +403,18 @@ def categorize_and_clean(news_list):
 महत्वपूर्ण गवर्नेंस गतिविधियां:
 <समाचार>
 """
-    key_index_arr = [key_index_doc] 
+    key_index_arr = [0] 
     categorized_text = call_gemini_with_rotation(
         prompt=prompt + "\n\n".join(news_list), 
         api_key_list=api_keys_doc, 
         key_index_ref=key_index_arr,
-        model_name="gemini-2.0-flash",
+        model_name=MODEL_DOC, 
         max_retries=3
     )
-    key_index_doc = key_index_arr[0] # Update global index
     
     return categorized_text
 
 def final_qc(news_list):
-    global key_index_doc
     # The prompt is good, retaining it.
     prompt = """
 आपको परिष्कृत समाचार बिंदुओं की एक सूची दी जा रही है। ये समाचार बिंदु पहले से ही बोल्डिंग (**) और हिंदी व्याकरण मानकों (उपसर्ग, नुक्ता, पूर्णविराम) का पालन करते हुए तैयार किए गए हैं।
@@ -415,15 +428,14 @@ def final_qc(news_list):
 - आउटपुट प्रत्येक समाचार को एक पूरा पैराग्राफ बनाएं, जहाँ सम्मिलित समाचार आपस में तार्किक और प्रवाही हों।
 - आउटपुट में केवल समाचार बिंदु ही दें, खुद से कोई भूमिका, स्पष्टीकरण या अतिरिक्त वाक्य न लिखें।
 """
-    key_index_arr = [key_index_doc] 
+    key_index_arr = [0] 
     qc_text = call_gemini_with_rotation(
         prompt=prompt + "\n\n".join(news_list), 
         api_key_list=api_keys_doc, 
         key_index_ref=key_index_arr,
-        model_name="gemini-2.0-flash",
+        model_name=MODEL_DOC, 
         max_retries=3
     )
-    key_index_doc = key_index_arr[0] # Update global index
 
     if qc_text:
         # Split by double newline to preserve paragraphs intact
@@ -556,9 +568,6 @@ def generate_report():
 
 # === MAIN PIPELINE ===
 def main():
-    # Configure initial models globally once
-    genai.configure(api_key=api_keys_6b[key_index_6b])
-    
     try:
         print("--- Starting Relevance Check (6B) ---")
         process_relevance()
