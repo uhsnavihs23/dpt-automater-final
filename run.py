@@ -16,6 +16,10 @@ import google.generativeai as genai
 # Set timezone
 IST = pytz.timezone("Asia/Kolkata")
 
+# --- GLOBAL CONFIGURATION ---
+MAX_RAW_LEN = 3000
+BATCH_DELAY_SEC = 5 # Increased delay from 2s to 5s for better rate limit avoidance
+
 # === Helper to exit with error if env var missing ===
 def get_env_var(name):
     val = os.getenv(name)
@@ -86,36 +90,90 @@ def batch_update(updates_list):
     except Exception as e:
         print(f"⚠️ Batch update failed: {e}")
 
-# === 6b) Process Relevance (1/0) ===
-api_keys_6b = [
-    get_env_var("GEMINI_KEY_6B_1"),
-    get_env_var("GEMINI_KEY_6B_2"),
-    get_env_var("GEMINI_KEY_6B_3"),
-    get_env_var("GEMINI_KEY_6B_4"),
-]
+# --- API Key Initialization ---
+
+# 6b: Relevance
+api_keys_6b = [get_env_var(f"GEMINI_KEY_6B_{i}") for i in range(1, 5)]
 key_index_6b = 0
-MAX_RAW_LEN = 3000
-BATCH_DELAY_SEC = 2
+model_6b = genai.GenerativeModel("gemini-1.5-flash")
 
-def get_next_model_6b():
-    global key_index_6b
-    genai.configure(api_key=api_keys_6b[key_index_6b])
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    key_index_6b = (key_index_6b + 1) % len(api_keys_6b)
-    return model
+# 6c: Cleaning
+api_keys_6c = [get_env_var(f"GEMINI_KEY_6C_{i}") for i in range(1, 3)]
+key_index_6c = 0
+model_6c = genai.GenerativeModel("gemini-1.5-flash")
 
-def safe_generate_content(model, prompt, max_retries=3):
+# 6d: Refine
+api_keys_6d = [get_env_var(f"GEMINI_KEY_6D_{i}") for i in range(1, 8)]
+key_index_6d = 0
+model_6d = genai.GenerativeModel("gemini-2.0-flash")
+
+# DOC: Reporting/Categorization
+api_keys_doc = [get_env_var(f"GEMINI_KEY_DOC_{i}") for i in range(1, 4)]
+key_index_doc = 0
+model_doc = genai.GenerativeModel("gemini-2.0-flash")
+
+# --- API Configuration and Rotation Helpers ---
+
+def get_model_and_switch(api_key_list, key_index_ref, model_name):
+    """Configures the Gemini API with the current key and returns the model."""
+    global key_index_6b, key_index_6c, key_index_6d, key_index_doc
+    
+    # Check which key index to update globally
+    if api_key_list is api_keys_6b:
+        key_index_ref[0] = key_index_6b
+    elif api_key_list is api_keys_6c:
+        key_index_ref[0] = key_index_6c
+    elif api_key_list is api_keys_6d:
+        key_index_ref[0] = key_index_6d
+    elif api_key_list is api_keys_doc:
+        key_index_ref[0] = key_index_doc
+    
+    # Configure the API with the current key
+    current_key_index = key_index_ref[0]
+    genai.configure(api_key=api_key_list[current_key_index])
+    
+    # Create and return the model instance
+    return genai.GenerativeModel(model_name)
+
+def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, max_retries=3):
+    """
+    Handles API calls with key rotation and exponential backoff, specifically
+    for 429 Resource Exhausted errors.
+    """
     for attempt in range(max_retries):
         try:
+            model = get_model_and_switch(api_key_list, key_index_ref, model_name)
             resp = model.generate_content(prompt)
             return resp.text.strip()
         except Exception as e:
-            print(f"⚠️ API call failed (attempt {attempt+1}): {e}")
-            time.sleep(2 ** attempt)
-    return ""
+            err_msg = str(e)
+            
+            if "429" in err_msg or "Resource exhausted" in err_msg:
+                # 1. Quota Error: Switch key immediately
+                key_index_ref[0] = (key_index_ref[0] + 1) % len(api_key_list)
+                print(f"⚠️ Quota exceeded on key {key_index_ref[0]} pool. Switching key and waiting 60s...")
+                time.sleep(60) # Longer wait after rate limit error
+                continue
+            
+            elif "503" in err_msg or "unavailable" in err_msg.lower():
+                # 2. Service Error: Use exponential backoff, no key switch needed yet
+                wait = min(30, 2 ** attempt)
+                print(f"⚠️ Service unavailable (503). Retrying in {wait}s...")
+                time.sleep(wait)
+                continue
+            
+            else:
+                # 3. Other Errors: Log and fail/return empty after all retries
+                print(f"⚠️ API call failed (attempt {attempt+1}): {e}")
+                time.sleep(2 ** attempt)
+
+    return "" # Fallback on final failure
+
+# --- 6b) Process Relevance (1/0) ---
 
 def generate_relevance(text):
-    model = get_next_model_6b()
+    global key_index_6b
+    
     prompt = f"""
 उत्तर प्रदेश की राजनीतिक/सरकारी गतिविधियों (दल, नेता, सरकार, विपक्ष, योजनाएँ,
 विधानसभा, लोकसभा, राजनीतिक कोर्ट केस) से संबंधित है?
@@ -123,7 +181,17 @@ def generate_relevance(text):
 
 {text}
 """
-    flag = safe_generate_content(model, prompt)
+    # Use call_gemini_with_rotation, passing key_index_6b as a mutable list/array
+    key_index_arr = [key_index_6b] 
+    flag = call_gemini_with_rotation(
+        prompt=prompt, 
+        api_key_list=api_keys_6b, 
+        key_index_ref=key_index_arr,
+        model_name="gemini-1.5-flash",
+        max_retries=4
+    )
+    key_index_6b = key_index_arr[0] # Update global index
+    
     return "1" if flag.strip().startswith("1") else "0"
 
 def process_relevance():
@@ -149,26 +217,14 @@ def process_relevance():
                                     datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
         except Exception:
             traceback.print_exc()
-        time.sleep(BATCH_DELAY_SEC)
+        time.sleep(BATCH_DELAY_SEC) # 5 seconds delay here
     batch_update(updates_relevance)
     batch_update(updates_runtime)
 
-# === 6c) Cleaning step ===
-api_keys_6c = [
-    get_env_var("GEMINI_KEY_6C_1"),
-    get_env_var("GEMINI_KEY_6C_2"),
-]
-key_index_6c = 0
+# --- 6c) Cleaning step ---
 
-def get_next_model_6c():
+def clean_text(raw_text):
     global key_index_6c
-    genai.configure(api_key=api_keys_6c[key_index_6c])
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    key_index_6c = (key_index_6c + 1) % len(api_keys_6c)
-    return model
-
-def clean_text(raw_text, max_retries=3):
-    model = get_next_model_6c()
     prompt = f"""
 आपको एक ट्वीट या समाचार का कच्चा टेक्स्ट दिया गया है। आपका काम है टेक्स्ट में से **केवल मुख्य समाचार सामग्री** को निकालना है।
 
@@ -181,22 +237,19 @@ def clean_text(raw_text, max_retries=3):
 6. "पूरा इंटरव्यू देखने के लिए इस लिंक पर क्लिक करें" जैसे कोई भी कॉल-टू-एक्शन वाक्य या फुटर।
 
 आउटपुट में **केवल** मुख्य समाचार या कथन ही होना चाहिए।
-"""
-    for attempt in range(max_retries):
-        try:
-            resp = model.generate_content(prompt + raw_text)
-            cleaned = (resp.text or "").strip()
-            if cleaned:
-                return cleaned
-        except Exception as e:
-            if "429" in str(e):
-                model = get_next_model_6c()
-                time.sleep(2 ** attempt)
-                continue
-            else:
-                print(f"⚠️ Cleaning API failed: {e}")
-                break
-    return raw_text[:3000] # Fallback to raw text
+""" + raw_text
+
+    key_index_arr = [key_index_6c] 
+    cleaned = call_gemini_with_rotation(
+        prompt=prompt, 
+        api_key_list=api_keys_6c, 
+        key_index_ref=key_index_arr,
+        model_name="gemini-1.5-flash",
+        max_retries=4
+    )
+    key_index_6c = key_index_arr[0] # Update global index
+
+    return cleaned or raw_text[:3000] # Fallback to raw text if empty
 
 def process_cleaning():
     headers = worksheet.row_values(1)
@@ -222,30 +275,11 @@ def process_cleaning():
                                     datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
         except Exception:
             traceback.print_exc()
-        time.sleep(2)
+        time.sleep(BATCH_DELAY_SEC) # 5 seconds delay here
     batch_update(updates_cleaned)
     batch_update(updates_runtime)
 
-# === 6d) Refine step ===
-api_keys_6d = [
-    get_env_var("GEMINI_KEY_6D_1"),
-    get_env_var("GEMINI_KEY_6D_2"),
-    get_env_var("GEMINI_KEY_6D_3"),
-    get_env_var("GEMINI_KEY_6D_4"),
-    get_env_var("GEMINI_KEY_6D_5"),
-    get_env_var("GEMINI_KEY_6D_6"),
-    get_env_var("GEMINI_KEY_6D_7"),
-]
-key_index_6d = 0
-
-def switch_api_key_6d():
-    global key_index_6d, model_6d
-    key_index_6d = (key_index_6d + 1) % len(api_keys_6d)
-    genai.configure(api_key=api_keys_6d[key_index_6d])
-    model_6d = genai.GenerativeModel("gemini-2.0-flash")
-
-genai.configure(api_key=api_keys_6d[key_index_6d])
-model_6d = genai.GenerativeModel("gemini-2.0-flash")
+# --- 6d) Refine step ---
 
 def remove_nukta(text: str) -> str:
     replacements = {
@@ -257,6 +291,7 @@ def remove_nukta(text: str) -> str:
     return text
 
 def refine_text(cleaned_text):
+    global key_index_6d
     prompt = f"""
 नीचे दिया गया समाचार पहले से साफ है। इसे पेशेवर, संक्षिप्त और प्रवाहपूर्ण रिपोर्टिंग शैली में परिष्कृत करें।
 निर्देश:
@@ -267,14 +302,14 @@ def refine_text(cleaned_text):
 - केवल उन्हीं तथ्यों का उपयोग करें जो इनपुट टेक्स्ट में हैं; कोई अनुमान या नया परिणाम न जोड़ें।
 - सप्ताह का दिन और स्थान से शुरुआत केवल तभी करें, जब समाचार किसी विशिष्ट कार्यक्रम, बयान या सुनवाई से जुड़ा हो।
 - व्यक्तियों के नाम पर उपसर्ग:
-   * हिंदू पुरुष → "श्री"
-   * हिंदू महिला → "श्रीमती" या "सुश्री"
-   * दिवंगत → "स्व. श्री" / "स्व. श्रीमती"
-   * अन्य धर्म → कोई उपसर्ग नहीं दें
+    * हिंदू पुरुष → "श्री"
+    * हिंदू महिला → "श्रीमती" या "सुश्री"
+    * दिवंगत → "स्व. श्री" / "स्व. श्रीमती"
+    * अन्य धर्म → कोई उपसर्ग नहीं दें
 - राजनीतिक दलों को केवल संक्षिप्त नाम से लिखें: सपा, भाजपा, कांग्रेस, बसपा, आप, आजाद समाज पार्टी।
 - स्थान और संस्थानों के नाम हिंदी में लिखें, उदाहरण के लिए:
-   * "यूपी" की जगह "उत्तर प्रदेश" का प्रयोग करें।
-   * अंग्रेजी के संक्षिप्त शब्द जैसे "IPS" को हिंदी में "आईपीएस" लिखें।
+    * "यूपी" की जगह "उत्तर प्रदेश" का प्रयोग करें।
+    * अंग्रेजी के संक्षिप्त शब्द जैसे "IPS" को हिंदी में "आईपीएस" लिखें।
 - सभी विराम चिह्न सही हिंदी विराम चिह्नों (पूर्णविराम "।") का प्रयोग करें; सेमीकोलन या अंग्रेजी विराम चिह्नों से बचें।
 - वाक्य संरचना साफ और तार्किक हो। दो बिंदुओं को जोड़ते समय उपयुक्त संयोजक ("साथ ही", "इसके अलावा") का प्रयोग करें; सेमीकोलन का प्रयोग न करें।
 - केवल आवश्यक शब्दों का प्रयोग करें।
@@ -286,30 +321,22 @@ def refine_text(cleaned_text):
 
 {cleaned_text}
 """
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            resp = model_6d.generate_content(prompt)
-            refined = resp.text.strip()
-            refined = remove_nukta(refined)       # cleanup nukta
-            refined = " ".join(refined.split())   # collapse whitespace
-            return refined
-        except Exception as e:
-            err_msg = str(e)
-            if "429" in err_msg:
-                print(f"⚠️ Quota exceeded on key {key_index_6d+1}, switching...")
-                switch_api_key_6d()
-                continue
-            elif "503" in err_msg or "unavailable" in err_msg.lower():
-                wait = min(30, 2 ** attempt)  # exponential backoff up to 30s
-                print(f"⚠️ Service unavailable (503). Retrying in {wait}s...")
-                time.sleep(wait)
-                continue
-            else:
-                print(f"⚠️ Refinement API failed: {e}")
-                return cleaned_text
-    return cleaned_text  # fallback
+    key_index_arr = [key_index_6d] 
+    refined = call_gemini_with_rotation(
+        prompt=prompt, 
+        api_key_list=api_keys_6d, 
+        key_index_ref=key_index_arr,
+        model_name="gemini-2.0-flash",
+        max_retries=4
+    )
+    key_index_6d = key_index_arr[0] # Update global index
 
+    if refined:
+        refined = remove_nukta(refined) # cleanup nukta
+        refined = " ".join(refined.split()) # collapse whitespace
+        return refined
+    
+    return cleaned_text # fallback
 
 def process_refinement():
     headers = worksheet.row_values(1)
@@ -333,52 +360,49 @@ def process_refinement():
                                     datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
         except Exception:
             traceback.print_exc()
-        time.sleep(2)
+        time.sleep(BATCH_DELAY_SEC) # 5 seconds delay here
     batch_update(updates_refined)
     batch_update(updates_runtime)
 
-# === 7) Generate Google Doc Report ===
-api_keys_doc = [
-    get_env_var("GEMINI_KEY_DOC_1"),
-    get_env_var("GEMINI_KEY_DOC_2"),
-    get_env_var("GEMINI_KEY_DOC_3"),
-]
-key_index_doc = 0
-def get_next_model_doc():
-    global key_index_doc
-    genai.configure(api_key=api_keys_doc[key_index_doc])
-    model = genai.GenerativeModel("gemini-2.0-flash")
-    key_index_doc = (key_index_doc + 1) % len(api_keys_doc)
-    return model
+# --- 7) Generate Google Doc Report ---
 
 def categorize_and_clean(news_list):
-    model = get_next_model_doc()
+    global key_index_doc
     prompt = f"""
 आपको उत्तर प्रदेश की समाचार बिंदुओं की सूची दी जा रही है।
 कृपया:
 1. समाचारों को दो श्रेणियों में बाँटें:
-   - महत्वपूर्ण राजनीतिक गतिविधियां
-   - महत्वपूर्ण गवर्नेंस गतिविधियां
+    - महत्वपूर्ण राजनीतिक गतिविधियां
+    - महत्वपूर्ण गवर्नेंस गतिविधियां
 2. प्रत्येक बिंदु पूरी तरह से एक पैराग्राफ में लिखें, कोई ● या बुलेट न लगाएँ और न ही बीच में पंक्ति विभाजन करें।
 3. प्रत्येक समाचार बिंदु में, निम्नलिखित **मुख्य तत्वों** को डबल एस्टेरिस्क (**) लगाकर **बोल्ड** करें:
-   - **व्यक्तिगत नाम** और उनके **उपसर्ग** (**श्री**, **श्रीमती**, **सुश्री** आदि)।
-   - **पदनाम** (जैसे **मुख्यमंत्री**, **सांसद**, **विधायक**, **अधिकारी**)।
-   - **स्थान** और **भूगोल** (शहर, जिला, राज्य - जैसे **लखनऊ**, **उत्तर प्रदेश**)।
-   - **पार्टी के नाम** (केवल संक्षिप्त रूप: **सपा**, **भाजपा**, **बसपा**, **कांग्रेस**, **आप**)।
-   - समाचार की **मुख्य गतिविधि** या **विषय** (जैसे **गिरफ्तार**, **घोषणा**, **वचन**)।
-   - **योजनाओं के नाम** (जैसे **किसान सम्मान निधि योजना**)।
+    - **व्यक्तिगत नाम** और उनके **उपसर्ग** (**श्री**, **श्रीमती**, **सुश्री** आदि)।
+    - **पदनाम** (जैसे **मुख्यमंत्री**, **सांसद**, **विधायक**, **अधिकारी**)।
+    - **स्थान** और **भूगोल** (शहर, जिला, राज्य - जैसे **लखनऊ**, **उत्तर प्रदेश**)।
+    - **पार्टी के नाम** (केवल संक्षिप्त रूप: **सपा**, **भाजपा**, **बसपा**, **कांग्रेस**, **आप**)।
+    - समाचार की **मुख्य गतिविधि** या **विषय** (जैसे **गिरफ्तार**, **घोषणा**, **वचन**)।
+    - **योजनाओं के नाम** (जैसे **किसान सम्मान निधि योजना**)।
 4. आउटपुट फॉर्मेट इस प्रकार दें:
 महत्वपूर्ण राजनीतिक गतिविधियां:
 <समाचार>
 महत्वपूर्ण गवर्नेंस गतिविधियां:
 <समाचार>
 """
-    resp = model.generate_content(prompt + "\n\n".join(news_list))
-    return resp.text.strip()
+    key_index_arr = [key_index_doc] 
+    categorized_text = call_gemini_with_rotation(
+        prompt=prompt + "\n\n".join(news_list), 
+        api_key_list=api_keys_doc, 
+        key_index_ref=key_index_arr,
+        model_name="gemini-2.0-flash",
+        max_retries=3
+    )
+    key_index_doc = key_index_arr[0] # Update global index
+    
+    return categorized_text
 
 def final_qc(news_list):
-    model = get_next_model_doc()
-    # ✨ IMPROVED PROMPT to strictly preserve bolding and formatting
+    global key_index_doc
+    # The prompt is good, retaining it.
     prompt = """
 आपको परिष्कृत समाचार बिंदुओं की एक सूची दी जा रही है। ये समाचार बिंदु पहले से ही बोल्डिंग (**) और हिंदी व्याकरण मानकों (उपसर्ग, नुक्ता, पूर्णविराम) का पालन करते हुए तैयार किए गए हैं।
 
@@ -391,10 +415,21 @@ def final_qc(news_list):
 - आउटपुट प्रत्येक समाचार को एक पूरा पैराग्राफ बनाएं, जहाँ सम्मिलित समाचार आपस में तार्किक और प्रवाही हों।
 - आउटपुट में केवल समाचार बिंदु ही दें, खुद से कोई भूमिका, स्पष्टीकरण या अतिरिक्त वाक्य न लिखें।
 """
-    resp = model.generate_content(prompt + "\n\n".join(news_list))
-    # Split by double newline to preserve paragraphs intact
-    paragraphs = [p.strip() for p in resp.text.strip().split('\n\n') if p.strip()]
-    return paragraphs
+    key_index_arr = [key_index_doc] 
+    qc_text = call_gemini_with_rotation(
+        prompt=prompt + "\n\n".join(news_list), 
+        api_key_list=api_keys_doc, 
+        key_index_ref=key_index_arr,
+        model_name="gemini-2.0-flash",
+        max_retries=3
+    )
+    key_index_doc = key_index_arr[0] # Update global index
+
+    if qc_text:
+        # Split by double newline to preserve paragraphs intact
+        paragraphs = [p.strip() for p in qc_text.strip().split('\n\n') if p.strip()]
+        return paragraphs
+    return news_list # Fallback
 
 def remove_filler_lines(lines):
     bad_phrases = [
@@ -413,7 +448,13 @@ def generate_report():
         print("⚠️ No refined news found!")
         return
 
+    print("→ Categorizing news...")
     categorized_text = categorize_and_clean(refined_news)
+    
+    if not categorized_text:
+        print("⚠️ Categorization failed after retries. Skipping report generation.")
+        return
+
     political_text, gov_text, section = [], [], None
     for line in categorized_text.splitlines():
         if "महत्वपूर्ण राजनीतिक गतिविधियां" in line:
@@ -428,12 +469,14 @@ def generate_report():
             elif section == "gov":
                 gov_text.append(line.strip())
 
+    print("→ Applying final quality check on Political news...")
     political_text = remove_filler_lines(final_qc(political_text))
+    print("→ Applying final quality check on Governance news...")
     gov_text = remove_filler_lines(final_qc(gov_text))
 
     # Join paragraphs with two newlines for clear paragraph breaks in Google Doc
-    political_block = "\n".join(political_text) if political_text else "—"
-    gov_block = "\n".join(gov_text) if gov_text else "—"
+    political_block = "\n\n".join(political_text) if political_text else "—"
+    gov_block = "\n\n".join(gov_text) if gov_text else "—"
 
     try:
         creds = Credentials.from_service_account_file("credentials.json", scopes=[
@@ -483,7 +526,7 @@ def generate_report():
         ).execute()
     except Exception as e:
         print(f"⚠️ Document text replacement failed: {e}")
-    # --- Debug: Show what bold markers are present before Apps Script ---
+    
     print('----------')
     print('GOVERNANCE BLOCK below:')
     print(gov_block)
@@ -513,18 +556,28 @@ def generate_report():
 
 # === MAIN PIPELINE ===
 def main():
+    # Configure initial models globally once
+    genai.configure(api_key=api_keys_6b[key_index_6b])
+    
     try:
+        print("--- Starting Relevance Check (6B) ---")
         process_relevance()
+        print("\n--- Starting Cleaning Step (6C) ---")
         process_cleaning()
+        print("\n--- Starting Refinement Step (6D) ---")
         process_refinement()
     except Exception as e:
         print(f"⚠️ Error in processing pipeline: {e}")
         traceback.print_exc()
-    print("⏳ Waiting for Sheets to sync updates...")
-    time.sleep(5)  # Allow Google Sheets to sync
+        
+    print("\n⏳ Waiting for Sheets to sync updates...")
+    time.sleep(10)  # Extended wait to allow Google Sheets to fully sync before report generation
+    
     # Refresh worksheet for latest refined content
     global worksheet
     worksheet = sh.worksheet(today_tab)
+    
+    print("\n--- Starting Report Generation (7) ---")
     try:
         generate_report()
     except Exception as e:
