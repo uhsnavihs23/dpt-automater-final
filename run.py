@@ -196,22 +196,33 @@ def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, m
 
 def generate_relevance(text):
     prompt = f"""
-उत्तर प्रदेश की राजनीतिक/सरकारी गतिविधियों (दल, नेता, सरकार, विपक्ष, योजनाएँ,
+क्या नीचे दिया गया समाचार उत्तर प्रदेश की राजनीतिक/सरकारी गतिविधियों (दल, नेता, सरकार, विपक्ष, योजनाएँ,
 विधानसभा, लोकसभा, राजनीतिक कोर्ट केस) से संबंधित है?
-सिर्फ 1 या 0 लौटाएँ। अन्य कुछ न लिखें।
+यदि हाँ, तो सिर्फ **1** लौटाएँ। यदि नहीं, तो सिर्फ **0** लौटाएँ। अन्य कुछ न लिखें।
 
+समाचार:
 {text}
 """
-    key_index_arr = [0] # Placeholder for mutable index
+    key_index_arr = [0]
     flag = call_gemini_with_rotation(
-        prompt=prompt, 
-        api_key_list=api_keys_6b, 
+        prompt=prompt,
+        api_key_list=api_keys_6b,
         key_index_ref=key_index_arr,
-        model_name=MODEL_6B, 
+        model_name=MODEL_6B,
         max_retries=4
     )
     
-    return "1" if flag.strip().startswith("1") else "0"
+    # Check if the output starts with '1' (case-insensitive and whitespace-stripped)
+    if flag.strip().startswith("1"):
+        return "1"
+    # Check if the output starts with '0'
+    elif flag.strip().startswith("0"):
+        return "0"
+    # If the output is empty or garbage, return a failure status
+    else:
+        # This will now write "⚠️ AI failed" to the Relevance column
+        print(f"Row relevance failed to parse output: '{flag}'")
+        return "⚠️ AI failed"
 
 def process_relevance():
     headers = worksheet.row_values(1)
@@ -247,7 +258,7 @@ def clean_text(raw_text):
 आपको एक ट्वीट या समाचार का कच्चा टेक्स्ट दिया गया है। आपका काम है टेक्स्ट में से **केवल मुख्य समाचार सामग्री** को निकालना है।
 
 सख्ती से निम्नलिखित तत्वों को हटा दें:
-1. शीर्षक या शुरूआती हैंडल जैसे "भारत समाचार | Bharat Samachar @bstvlive" या कोई भी चैनल/अकाउंट नाम।
+1. शुरूआती हैंडल जैसे "भारत समाचार | Bharat Samachar @bstvlive" या कोई भी चैनल/अकाउंट नाम।
 2. सभी हैशटैग (# से शुरू होने वाले)।
 3. सभी मेंशन (@ से शुरू होने वाले)।
 4. सभी URLs/लिंक्स (जैसे youtube.com, https:// आदि)।
@@ -384,12 +395,14 @@ def process_refinement():
 
 def categorize_and_clean(news_list):
     prompt = f"""
-आपको उत्तर प्रदेश की समाचार बिंदुओं की सूची दी जा रही है।
+आपको उत्तर प्रदेश की **परिष्कृत (refined) समाचार बिंदुओं की सूची** दी जा रही है।
+यह सूची पहले से ही सही हिंदी व्याकरण और **बोल्डिंग (**) मानकों** का पालन करती है।
+
 कृपया:
 1. समाचारों को दो श्रेणियों में बाँटें:
-    - महत्वपूर्ण राजनीतिक गतिविधियां
-    - महत्वपूर्ण गवर्नेंस गतिविधियां
-2. प्रत्येक बिंदु पूरी तरह से एक पैराग्राफ में लिखें, कोई ● या बुलेट न लगाएँ और न ही बीच में पंक्ति विभाजन करें।
+    - महत्वपूर्ण राजनीतिक गतिविधियां
+    - महत्वपूर्ण गवर्नेंस गतिविधियां
+2. प्रत्येक बिंदु पूरी तरह से एक पैराग्राफ में लिखें। यदि आवश्यक हो, तो तार्किक रूप से संबंधित बिंदुओं को एक पैराग्राफ में मर्ज करें।
 3. प्रत्येक समाचार बिंदु में, निम्नलिखित **मुख्य तत्वों** को डबल एस्टेरिस्क (**) लगाकर **बोल्ड** करें:
     - **व्यक्तिगत नाम** और उनके **उपसर्ग** (**श्री**, **श्रीमती**, **सुश्री** आदि)।
     - **पदनाम** (जैसे **मुख्यमंत्री**, **सांसद**, **विधायक**, **अधिकारी**)।
@@ -397,11 +410,14 @@ def categorize_and_clean(news_list):
     - **पार्टी के नाम** (केवल संक्षिप्त रूप: **सपा**, **भाजपा**, **बसपा**, **कांग्रेस**, **आप**)।
     - समाचार की **मुख्य गतिविधि** या **विषय** (जैसे **गिरफ्तार**, **घोषणा**, **वचन**)।
     - **योजनाओं के नाम** (जैसे **किसान सम्मान निधि योजना**)।
-4. आउटपुट फॉर्मेट इस प्रकार दें:
+
+आउटपुट फॉर्मेट इस प्रकार दें:
 महत्वपूर्ण राजनीतिक गतिविधियां:
-<समाचार>
+<समाचार 1>
+<समाचार 2>
 महत्वपूर्ण गवर्नेंस गतिविधियां:
-<समाचार>
+<समाचार 3>
+<समाचार 4>
 """
     key_index_arr = [0] 
     categorized_text = call_gemini_with_rotation(
@@ -487,8 +503,8 @@ def generate_report():
     gov_text = remove_filler_lines(final_qc(gov_text))
 
     # Join paragraphs with two newlines for clear paragraph breaks in Google Doc
-    political_block = "\n\n".join(political_text) if political_text else "—"
-    gov_block = "\n\n".join(gov_text) if gov_text else "—"
+    political_block = "\n".join(political_text) if political_text else "—"
+    gov_block = "\n".join(gov_text) if gov_text else "—"
 
     try:
         creds = Credentials.from_service_account_file("credentials.json", scopes=[
