@@ -20,6 +20,13 @@ IST = pytz.timezone("Asia/Kolkata")
 MAX_RAW_LEN = 3000
 BATCH_DELAY_SEC = 5 # Increased delay to 5s to respect the new RPM limits (max 15 RPM)
 
+
+def ordinal(n):
+    """Returns the English ordinal suffix for a number (e.g., 1 -> st, 2 -> nd)."""
+    if 10 <= n % 100 <= 20:
+        return 'th'
+    return {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+
 # === Helper to exit with error if env var missing ===
 def get_env_var(name):
     val = os.getenv(name)
@@ -547,7 +554,10 @@ def generate_report():
         except Exception as e:
             print(f"⚠️ Sharing doc failed for {email}: {e}")
 
-    formatted_date = datetime.now().strftime("%B %dth, %Y")
+
+    today = datetime.now()
+    day_with_suffix = f"{today.day}{ordinal(today.day)}"
+    formatted_date = today.strftime(f"%B {day_with_suffix}, %Y")
     try:
         docs_service.documents().batchUpdate(
             documentId=doc_id, body={
