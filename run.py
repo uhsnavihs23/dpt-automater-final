@@ -243,24 +243,34 @@ def process_relevance():
     raw_col = worksheet.col_values(idx_map["Raw"])[1:]
     relevance_col = worksheet.col_values(idx_map["Relevance"])[1:]
     updates_relevance, updates_runtime = [], []
+    
+    print("⚠️ Skipping AI Relevance check (6B) to save API quota. Defaults to '0' for blank cells.")
+    
     for i, raw_text in enumerate(raw_col):
         row_number = i + 2
         raw_text = raw_text.strip()
+        
+        # Skip rows that are empty or failed to fetch
         if not raw_text or raw_text in ["⚠️ fetch failed", ""]:
             continue
+            
         existing_flag = relevance_col[i] if i < len(relevance_col) else ""
-        if existing_flag in ["0", "1"]:
+        
+        # Skip if the flag is already set (user manually entered 0 or 1)
+        if existing_flag in ["0", "1", "⚠️ AI failed"]:
             continue
-        try:
-            print(f"Row {row_number} → Checking relevance...")
-            flag = generate_relevance(raw_text[:MAX_RAW_LEN])
-            print(f"Row {row_number} → Relevance = {flag}")
+            
+        # --- NEW MANUAL FLAG LOGIC ---
+        # If the cell is blank, set it to '0' manually without using the API.
+        if not existing_flag:
+            flag = "0"
+            print(f"Row {row_number} → Manually set Relevance = {flag} (Was blank)")
+            
             updates_relevance.append((row_number, idx_map["Relevance"], flag))
             updates_runtime.append((row_number, idx_map["RunTime"],
                                     datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
-        except Exception:
-            traceback.print_exc()
-        time.sleep(BATCH_DELAY_SEC) # 5 seconds delay here
+        # --- END NEW LOGIC ---
+        
     batch_update(updates_relevance)
     batch_update(updates_runtime)
 
