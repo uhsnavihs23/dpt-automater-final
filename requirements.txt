@@ -6,7 +6,7 @@ oauth2client==4.1.3
 selenium==4.11.2
 playwright==1.37.0
 newspaper3k==0.2.8
-google-generativeai
+google-genai
 nest_asyncio==1.6.0
 lxml==4.9.3
 python-dateutil==2.8.2
