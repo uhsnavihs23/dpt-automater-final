@@ -11,7 +11,8 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # Set timezone
 IST = pytz.timezone("Asia/Kolkata")
@@ -125,29 +126,28 @@ MODEL_DOC = "gemini-2.5-flash"
 
 # --- API Configuration and Rotation Helpers ---
 
-def get_model_and_switch(api_key_list, key_index_ref, model_name):
-    """Configures the Gemini API with the current key and returns the model."""
+# def get_model_and_switch(api_key_list, key_index_ref, model_name):
+#     """Configures the Gemini API with the current key and returns the model."""
     
-    # Map the current global index to the mutable reference [0]
-    if api_key_list is api_keys_6b:
-        key_index_ref[0] = globals().get('key_index_6b', 0)
-    elif api_key_list is api_keys_6c:
-        key_index_ref[0] = globals().get('key_index_6c', 0)
-    elif api_key_list is api_keys_6d:
-        key_index_ref[0] = globals().get('key_index_6d', 0)
-    elif api_key_list is api_keys_doc:
-        key_index_ref[0] = globals().get('key_index_doc', 0)
+#     # Map the current global index to the mutable reference [0]
+#     if api_key_list is api_keys_6b:
+#         key_index_ref[0] = globals().get('key_index_6b', 0)
+#     elif api_key_list is api_keys_6c:
+#         key_index_ref[0] = globals().get('key_index_6c', 0)
+#     elif api_key_list is api_keys_6d:
+#         key_index_ref[0] = globals().get('key_index_6d', 0)
+#     elif api_key_list is api_keys_doc:
+#         key_index_ref[0] = globals().get('key_index_doc', 0)
     
-    current_key_index = key_index_ref[0]
-    genai.configure(api_key=api_key_list[current_key_index])
+#     current_key_index = key_index_ref[0]
+#     genai.configure(api_key=api_key_list[current_key_index])
     
-    # Create and return the model instance
-    return genai.GenerativeModel(model_name)
+#     # Create and return the model instance
+#     return genai.GenerativeModel(model_name)
 
 def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, max_retries=4):
     """
-    Handles API calls with key rotation and exponential backoff, specifically
-    for 404 Model Not Found and 429 Resource Exhausted errors.
+    Handles API calls with key rotation using the new google-genai SDK.
     """
     if not api_key_list:
         print(f"❌ No API keys found for model {model_name}. Skipping call.")
@@ -155,11 +155,24 @@ def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, m
 
     for attempt in range(max_retries):
         try:
-            model = get_model_and_switch(api_key_list, key_index_ref, model_name)
-            resp = model.generate_content(prompt)
-            
-            # Update the global index for the *next* successful call's start
+            # 1. Get the current key based on the reference index
+            current_key_index = key_index_ref[0]
+            api_key = api_key_list[current_key_index]
+
+            # 2. Instantiate the new Client (New SDK approach)
+            client = genai.Client(api_key=api_key)
+
+            # 3. Generate Content
+            # Note: 'contents' replaces the old argument, and we pass the model name here
+            resp = client.models.generate_content(
+                model=model_name,
+                contents=prompt
+            )
+
+            # 4. Update the global index for the *next* successful call's start
             next_index = (key_index_ref[0] + 1) % len(api_key_list)
+            
+            # Map back to global variables to persist state across calls
             if api_key_list is api_keys_6b:
                 globals()['key_index_6b'] = next_index
             elif api_key_list is api_keys_6c:
@@ -174,30 +187,86 @@ def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, m
         except Exception as e:
             err_msg = str(e)
             
+            # Error handling adapted for typical HTTP errors wrapped by the new SDK
             if "404" in err_msg and "model" in err_msg.lower():
-                print(f"❌ Model Not Found Error: {model_name}. Please check the model name is correct for your account/API.")
+                print(f"❌ Model Not Found Error: {model_name}. Check model name.")
                 return ""
             
             if "429" in err_msg or "Resource exhausted" in err_msg:
-                # 1. Quota Error: Switch key immediately
+                # Quota Error: Switch key immediately
                 key_index_ref[0] = (key_index_ref[0] + 1) % len(api_key_list)
-                print(f"⚠️ Quota exceeded on key pool. Switching to key index {key_index_ref[0]} and waiting 60s...")
-                time.sleep(60) # Longer wait after rate limit error
+                print(f"⚠️ Quota exceeded. Switching to key index {key_index_ref[0]} and waiting 60s...")
+                time.sleep(60)
                 continue
             
             elif "503" in err_msg or "unavailable" in err_msg.lower():
-                # 2. Service Error: Use exponential backoff
+                # Service Error: Backoff
                 wait = min(30, 2 ** attempt)
                 print(f"⚠️ Service unavailable (503). Retrying in {wait}s...")
                 time.sleep(wait)
                 continue
             
             else:
-                # 3. Other Errors: Use exponential backoff
+                # Other Errors
                 print(f"⚠️ API call failed (attempt {attempt+1}): {e}")
                 time.sleep(2 ** attempt)
 
     return "" # Fallback on final failure
+
+# def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, max_retries=4):
+#     """
+#     Handles API calls with key rotation and exponential backoff, specifically
+#     for 404 Model Not Found and 429 Resource Exhausted errors.
+#     """
+#     if not api_key_list:
+#         print(f"❌ No API keys found for model {model_name}. Skipping call.")
+#         return ""
+
+#     for attempt in range(max_retries):
+#         try:
+#             model = get_model_and_switch(api_key_list, key_index_ref, model_name)
+#             resp = model.generate_content(prompt)
+            
+#             # Update the global index for the *next* successful call's start
+#             next_index = (key_index_ref[0] + 1) % len(api_key_list)
+#             if api_key_list is api_keys_6b:
+#                 globals()['key_index_6b'] = next_index
+#             elif api_key_list is api_keys_6c:
+#                 globals()['key_index_6c'] = next_index
+#             elif api_key_list is api_keys_6d:
+#                 globals()['key_index_6d'] = next_index
+#             elif api_key_list is api_keys_doc:
+#                 globals()['key_index_doc'] = next_index
+
+#             return resp.text.strip()
+            
+#         except Exception as e:
+#             err_msg = str(e)
+            
+#             if "404" in err_msg and "model" in err_msg.lower():
+#                 print(f"❌ Model Not Found Error: {model_name}. Please check the model name is correct for your account/API.")
+#                 return ""
+            
+#             if "429" in err_msg or "Resource exhausted" in err_msg:
+#                 # 1. Quota Error: Switch key immediately
+#                 key_index_ref[0] = (key_index_ref[0] + 1) % len(api_key_list)
+#                 print(f"⚠️ Quota exceeded on key pool. Switching to key index {key_index_ref[0]} and waiting 60s...")
+#                 time.sleep(60) # Longer wait after rate limit error
+#                 continue
+            
+#             elif "503" in err_msg or "unavailable" in err_msg.lower():
+#                 # 2. Service Error: Use exponential backoff
+#                 wait = min(30, 2 ** attempt)
+#                 print(f"⚠️ Service unavailable (503). Retrying in {wait}s...")
+#                 time.sleep(wait)
+#                 continue
+            
+#             else:
+#                 # 3. Other Errors: Use exponential backoff
+#                 print(f"⚠️ API call failed (attempt {attempt+1}): {e}")
+#                 time.sleep(2 ** attempt)
+
+#     return "" # Fallback on final failure
 
 # --- 6b) Process Relevance (1/0) ---
 
