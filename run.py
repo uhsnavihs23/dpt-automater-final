@@ -612,9 +612,21 @@ def generate_report():
 
     today_date_str = datetime.now().strftime("%Y%m%d")
     new_doc_title = f"{today_date_str} Uttar Pradesh Daily Political Tracker"
+    
+    # The Folder ID from your link
+    TARGET_FOLDER_ID = "1oR7_OjjA4QQLrH3f7-KgU4O8twIG8bF-"
     try:
-        new_doc = drive_service.files().copy(fileId=DOC_TEMPLATE_ID, body={"name": new_doc_title}).execute()
-        doc_id = new_doc.get("id")
+        # Added 'parents' list to the body to save it in the specific folder
+        new_doc = drive_service.files().copy(
+            fileId=DOC_TEMPLATE_ID, 
+            body={
+                "name": new_doc_title,
+                "parents": [TARGET_FOLDER_ID]
+            }
+        ).execute()
+        
+        doc_id = new_doc.get("id")    
+        
         doc_link = f"https://docs.google.com/document/d/{doc_id}/edit"
     except Exception as e:
         print(f"⚠️ Google Drive file copy failed: {e}")
