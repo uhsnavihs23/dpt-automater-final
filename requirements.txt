@@ -13,3 +13,5 @@ python-dateutil==2.8.2
 requests==2.31.0
 pytz
 packaging
+scikit-learn
+joblib
