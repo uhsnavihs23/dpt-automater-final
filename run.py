@@ -13,6 +13,10 @@ from googleapiclient.discovery import build
 from google.oauth2.service_account import Credentials
 from google import genai
 from google.genai import types
+import joblib  
+import warnings 
+from sklearn.exceptions import InconsistentVersionWarning 
+warnings.filterwarnings("ignore", category=InconsistentVersionWarning) 
 
 # Set timezone
 IST = pytz.timezone("Asia/Kolkata")
@@ -270,41 +274,43 @@ def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, m
 
 # --- 6b) Process Relevance (1/0) ---
 
-def generate_relevance(text):
-    prompt = f"""
-क्या नीचे दिया गया समाचार **सख्ती से** उत्तर प्रदेश की **उच्च स्तरीय राजनीतिक** (दल, नेता, सरकार, विपक्ष, विधानसभा, लोकसभा) या **प्रमुख नीति/योजना संबंधी सरकारी गतिविधियों** से संबंधित है?
+# def generate_relevance(text):
+#     prompt = f"""
+# क्या नीचे दिया गया समाचार **सख्ती से** उत्तर प्रदेश की **उच्च स्तरीय राजनीतिक** (दल, नेता, सरकार, विपक्ष, विधानसभा, लोकसभा) या **प्रमुख नीति/योजना संबंधी सरकारी गतिविधियों** से संबंधित है?
 
-**निम्नलिखित विषयों को **अस्वीकार (Reject)** करें और सिर्फ **0** लौटाएँ:**
-1. सामान्य अपराध (हत्या, चोरी, यातायात उल्लंघन, अवैध तस्करी)।
-2. दुर्घटनाएँ, आग, या प्राकृतिक आपदाएँ।
-3. स्थानीय बिजली, पानी, सड़क या नगर निगम के सामान्य प्रशासनिक कार्य (जैसे मीटर लगाना, अतिक्रमण हटाना)।
-4. अदालती मामले जो केवल व्यक्तिगत या सामान्य अपराध से संबंधित हों, न कि राजनीतिक विवादों से।
+# **निम्नलिखित विषयों को **अस्वीकार (Reject)** करें और सिर्फ **0** लौटाएँ:**
+# 1. सामान्य अपराध (हत्या, चोरी, यातायात उल्लंघन, अवैध तस्करी)।
+# 2. दुर्घटनाएँ, आग, या प्राकृतिक आपदाएँ।
+# 3. स्थानीय बिजली, पानी, सड़क या नगर निगम के सामान्य प्रशासनिक कार्य (जैसे मीटर लगाना, अतिक्रमण हटाना)।
+# 4. अदालती मामले जो केवल व्यक्तिगत या सामान्य अपराध से संबंधित हों, न कि राजनीतिक विवादों से।
 
-यदि हाँ, तो सिर्फ **1** लौटाएँ। यदि नहीं, तो सिर्फ **0** लौटाएँ। अन्य कुछ न लिखें।
+# यदि हाँ, तो सिर्फ **1** लौटाएँ। यदि नहीं, तो सिर्फ **0** लौटाएँ। अन्य कुछ न लिखें।
 
-समाचार:
-{text}
-"""
-    key_index_arr = [0]
-    flag = call_gemini_with_rotation(
-        prompt=prompt,
-        api_key_list=api_keys_6b,
-        key_index_ref=key_index_arr,
-        model_name=MODEL_6B,
-        max_retries=4
-    )
+# समाचार:
+# {text}
+# """
+#     key_index_arr = [0]
+#     flag = call_gemini_with_rotation(
+#         prompt=prompt,
+#         api_key_list=api_keys_6b,
+#         key_index_ref=key_index_arr,
+#         model_name=MODEL_6B,
+#         max_retries=4
+#     )
     
-    # Check if the output starts with '1' (case-insensitive and whitespace-stripped)
-    if flag.strip().startswith("1"):
-        return "1"
-    # Check if the output starts with '0'
-    elif flag.strip().startswith("0"):
-        return "0"
-    # If the output is empty or garbage, return a failure status
-    else:
-        # This will now write "⚠️ AI failed" to the Relevance column
-        print(f"Row relevance failed to parse output: '{flag}'")
-        return "⚠️ AI failed"
+#     # Check if the output starts with '1' (case-insensitive and whitespace-stripped)
+#     if flag.strip().startswith("1"):
+#         return "1"
+#     # Check if the output starts with '0'
+#     elif flag.strip().startswith("0"):
+#         return "0"
+#     # If the output is empty or garbage, return a failure status
+#     else:
+#         # This will now write "⚠️ AI failed" to the Relevance column
+#         print(f"Row relevance failed to parse output: '{flag}'")
+#         return "⚠️ AI failed"
+
+# --- 6b) Process Relevance (Local ML Model) ---
 
 def process_relevance():
     headers = worksheet.row_values(1)
@@ -313,7 +319,18 @@ def process_relevance():
     relevance_col = worksheet.col_values(idx_map["Relevance"])[1:]
     updates_relevance, updates_runtime = [], []
     
-    print("⚠️ Skipping AI Relevance check (6B) to save API quota. Defaults to '0' for blank cells.")
+    # --- Load the Model ---
+    print("🧠 Loading local relevance model from relevance_model.pkl...")
+    try:
+        relevance_model = joblib.load('relevance_model.pkl')
+        model_loaded = True
+        print("✅ Local Model loaded successfully!")
+    except Exception as e:
+        print(f"⚠️ Could not load 'relevance_model.pkl': {e}")
+        print("➡️ Defaulting to '0' for safety.")
+        model_loaded = False
+
+    print("--- Starting Relevance Check (Local ML Mode) ---")
     
     for i, raw_text in enumerate(raw_col):
         row_number = i + 2
@@ -325,20 +342,26 @@ def process_relevance():
             
         existing_flag = relevance_col[i] if i < len(relevance_col) else ""
         
-        # Skip if the flag is already set (user manually entered 0 or 1)
+        # Skip if already flagged manually or by a previous run
         if existing_flag in ["0", "1", "⚠️ AI failed"]:
             continue
             
-        # --- NEW MANUAL FLAG LOGIC ---
-        # If the cell is blank, set it to '0' manually without using the API.
-        if not existing_flag:
-            flag = "0"
-            print(f"Row {row_number} → Manually set Relevance = {flag} (Was blank)")
+        # --- PREDICTION LOGIC ---
+        if model_loaded:
+            try:
+                # Predict returns an array like [1] or [0]
+                prediction = relevance_model.predict([raw_text])[0]
+                flag = str(prediction)
+                print(f"Row {row_number} → ML Predicted: {flag}")
+            except Exception as e:
+                print(f"Row {row_number} → Prediction failed: {e}")
+                flag = "0" # Default fallback
+        else:
+            flag = "0" # Default if model file missing
             
-            updates_relevance.append((row_number, idx_map["Relevance"], flag))
-            updates_runtime.append((row_number, idx_map["RunTime"],
-                                    datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
-        # --- END NEW LOGIC ---
+        updates_relevance.append((row_number, idx_map["Relevance"], flag))
+        updates_runtime.append((row_number, idx_map["RunTime"],
+                                datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
         
     batch_update(updates_relevance)
     batch_update(updates_runtime)
