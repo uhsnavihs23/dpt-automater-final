@@ -236,12 +236,23 @@ def clean_noise_for_prediction(text):
 
 # --- 6b) Process Relevance (Local ML Model) ---
 
+# --- 6b) Process Relevance (Local ML Model with Confidence & Threshold) ---
+
 def process_relevance():
     headers = worksheet.row_values(1)
     idx_map = {name: headers.index(name)+1 for name in headers}
     raw_col = worksheet.col_values(idx_map["Raw"])[1:]
     relevance_col = worksheet.col_values(idx_map["Relevance"])[1:]
-    updates_relevance, updates_runtime = [], []
+    
+    # Lists to store updates
+    updates_relevance = []
+    updates_runtime = []
+    updates_confidence = [] # New list for Column G
+    
+    # --- CONFIGURATION ---
+    # Increase this to make the model stricter. 
+    # 0.75 means it must be 75% sure to flag as '1'.
+    CONFIDENCE_THRESHOLD = 0.75 
     
     # --- Load the Model ---
     print("🧠 Loading local relevance model from relevance_model.pkl...")
@@ -254,7 +265,7 @@ def process_relevance():
         print("➡️ Defaulting to '0' for safety.")
         model_loaded = False
 
-    print("--- Starting Relevance Check (Local ML Mode) ---")
+    print(f"--- Starting Relevance Check (Threshold: {CONFIDENCE_THRESHOLD}) ---")
     
     for i, raw_text in enumerate(raw_col):
         row_number = i + 2
@@ -271,53 +282,50 @@ def process_relevance():
             continue
             
         # --- PREDICTION LOGIC ---
+        flag = "0"
+        confidence_score = 0.0
+        
         if model_loaded:
             try:
-                # 1. Clean the text (Critical for accuracy)
-                clean_text = clean_noise_for_prediction(raw_text)
+                # 1. Clean the text (Using same simple cleaning as training)
+                clean_text = raw_text.replace("Bharat Samachar", "").replace("Translate post", "")
 
-                # 2. Predict using Probability
+                # 2. Get Probability (Confidence)
                 # predict_proba returns [prob_0, prob_1]
                 probs = relevance_model.predict_proba([clean_text])[0]
-                prob_score = probs[1] # The probability it IS relevant (1)
+                confidence_score = probs[1] # The probability it IS relevant (1)
                 
-                # SENSITIVITY: If >35% sure, mark as 1. 
-                # This catches subtle news like the ones you listed.
-                new_flag = "1" if prob_score > 0.35 else "0"
+                # 3. Apply Stricter Threshold
+                # Only mark as '1' if confidence is higher than 0.75
+                flag = "1" if confidence_score >= CONFIDENCE_THRESHOLD else "0"
                 
-                # LOGIC: Update if blank OR if upgrading 0 -> 1
-                should_update = False
-                
-                if existing_flag == "":
-                    should_update = True
-                elif existing_flag == "0" and new_flag == "1":
-                    print(f"Row {row_number} → Upgrading 0 to 1 (Score: {prob_score:.2f})")
-                    should_update = True
-                
-                if should_update:
-                    if existing_flag == "":
-                        print(f"Row {row_number} → Predicted: {new_flag} (Score: {prob_score:.2f})")
-                        
-                    updates_relevance.append((row_number, idx_map["Relevance"], new_flag))
-                    updates_runtime.append((row_number, idx_map["RunTime"],
-                                            datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
-                                            
+                # Debug print for high-probability items
+                if flag == "1":
+                    print(f"Row {row_number} → Flagged '1' (Confidence: {confidence_score:.2f})")
+                elif confidence_score > 0.5:
+                    print(f"Row {row_number} → Skipped (Score {confidence_score:.2f} < {CONFIDENCE_THRESHOLD})")
+
             except Exception as e:
                 print(f"Row {row_number} → Prediction failed: {e}")
-                # If blank and error, default to 0 to keep pipeline moving
-                if existing_flag == "":
-                    updates_relevance.append((row_number, idx_map["Relevance"], "0"))
-                    updates_runtime.append((row_number, idx_map["RunTime"],
-                                            datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
-        else:
-            # Fallback if model didn't load
-            if existing_flag == "":
-                updates_relevance.append((row_number, idx_map["Relevance"], "0"))
-                updates_runtime.append((row_number, idx_map["RunTime"],
-                                        datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
+                flag = "0"
         
+        # Only update if we have a new flag '1' OR if the cell was totally blank
+        if flag == "1" or existing_flag == "":
+            updates_relevance.append((row_number, idx_map["Relevance"], flag))
+            updates_runtime.append((row_number, idx_map["RunTime"],
+                                    datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
+            
+            # Write Confidence Score to Column G (Index 7)
+            # We format it as a percentage string (e.g., "85%")
+            if flag == "1":
+                score_str = f"{int(confidence_score * 100)}%"
+                # Assuming Column G is the 7th column. Adjust if your sheet structure is different.
+                updates_confidence.append((row_number, 7, score_str)) 
+        
+    # Execute batch updates
     batch_update(updates_relevance)
     batch_update(updates_runtime)
+    batch_update(updates_confidence) # Update Column G
 
 # --- 6c) Cleaning step ---
 
