@@ -15,6 +15,7 @@ from google import genai
 from google.genai import types
 import joblib  
 import warnings 
+import re
 from sklearn.exceptions import InconsistentVersionWarning 
 warnings.filterwarnings("ignore", category=InconsistentVersionWarning) 
 
@@ -217,98 +218,21 @@ def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, m
 
     return "" # Fallback on final failure
 
-# def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, max_retries=4):
-#     """
-#     Handles API calls with key rotation and exponential backoff, specifically
-#     for 404 Model Not Found and 429 Resource Exhausted errors.
-#     """
-#     if not api_key_list:
-#         print(f"❌ No API keys found for model {model_name}. Skipping call.")
-#         return ""
-
-#     for attempt in range(max_retries):
-#         try:
-#             model = get_model_and_switch(api_key_list, key_index_ref, model_name)
-#             resp = model.generate_content(prompt)
-            
-#             # Update the global index for the *next* successful call's start
-#             next_index = (key_index_ref[0] + 1) % len(api_key_list)
-#             if api_key_list is api_keys_6b:
-#                 globals()['key_index_6b'] = next_index
-#             elif api_key_list is api_keys_6c:
-#                 globals()['key_index_6c'] = next_index
-#             elif api_key_list is api_keys_6d:
-#                 globals()['key_index_6d'] = next_index
-#             elif api_key_list is api_keys_doc:
-#                 globals()['key_index_doc'] = next_index
-
-#             return resp.text.strip()
-            
-#         except Exception as e:
-#             err_msg = str(e)
-            
-#             if "404" in err_msg and "model" in err_msg.lower():
-#                 print(f"❌ Model Not Found Error: {model_name}. Please check the model name is correct for your account/API.")
-#                 return ""
-            
-#             if "429" in err_msg or "Resource exhausted" in err_msg:
-#                 # 1. Quota Error: Switch key immediately
-#                 key_index_ref[0] = (key_index_ref[0] + 1) % len(api_key_list)
-#                 print(f"⚠️ Quota exceeded on key pool. Switching to key index {key_index_ref[0]} and waiting 60s...")
-#                 time.sleep(60) # Longer wait after rate limit error
-#                 continue
-            
-#             elif "503" in err_msg or "unavailable" in err_msg.lower():
-#                 # 2. Service Error: Use exponential backoff
-#                 wait = min(30, 2 ** attempt)
-#                 print(f"⚠️ Service unavailable (503). Retrying in {wait}s...")
-#                 time.sleep(wait)
-#                 continue
-            
-#             else:
-#                 # 3. Other Errors: Use exponential backoff
-#                 print(f"⚠️ API call failed (attempt {attempt+1}): {e}")
-#                 time.sleep(2 ** attempt)
-
-#     return "" # Fallback on final failure
-
-# --- 6b) Process Relevance (1/0) ---
-
-# def generate_relevance(text):
-#     prompt = f"""
-# क्या नीचे दिया गया समाचार **सख्ती से** उत्तर प्रदेश की **उच्च स्तरीय राजनीतिक** (दल, नेता, सरकार, विपक्ष, विधानसभा, लोकसभा) या **प्रमुख नीति/योजना संबंधी सरकारी गतिविधियों** से संबंधित है?
-
-# **निम्नलिखित विषयों को **अस्वीकार (Reject)** करें और सिर्फ **0** लौटाएँ:**
-# 1. सामान्य अपराध (हत्या, चोरी, यातायात उल्लंघन, अवैध तस्करी)।
-# 2. दुर्घटनाएँ, आग, या प्राकृतिक आपदाएँ।
-# 3. स्थानीय बिजली, पानी, सड़क या नगर निगम के सामान्य प्रशासनिक कार्य (जैसे मीटर लगाना, अतिक्रमण हटाना)।
-# 4. अदालती मामले जो केवल व्यक्तिगत या सामान्य अपराध से संबंधित हों, न कि राजनीतिक विवादों से।
-
-# यदि हाँ, तो सिर्फ **1** लौटाएँ। यदि नहीं, तो सिर्फ **0** लौटाएँ। अन्य कुछ न लिखें।
-
-# समाचार:
-# {text}
-# """
-#     key_index_arr = [0]
-#     flag = call_gemini_with_rotation(
-#         prompt=prompt,
-#         api_key_list=api_keys_6b,
-#         key_index_ref=key_index_arr,
-#         model_name=MODEL_6B,
-#         max_retries=4
-#     )
+# --- Helper: Clean Noise (Matches Training Logic) ---
+def clean_noise_for_prediction(text):
+    text = str(text)
+    # Remove boilerplate that confuses the model
+    ignore_list = ["भारत समाचार", "Bharat Samachar", "@bstvlive", "Translate post", "Views", "AM", "PM"]
+    for word in ignore_list:
+        text = text.replace(word, "")
     
-#     # Check if the output starts with '1' (case-insensitive and whitespace-stripped)
-#     if flag.strip().startswith("1"):
-#         return "1"
-#     # Check if the output starts with '0'
-#     elif flag.strip().startswith("0"):
-#         return "0"
-#     # If the output is empty or garbage, return a failure status
-#     else:
-#         # This will now write "⚠️ AI failed" to the Relevance column
-#         print(f"Row relevance failed to parse output: '{flag}'")
-#         return "⚠️ AI failed"
+    # Remove timestamps like "10:20" or "5:03" using Regex
+    text = re.sub(r'\d{1,2}:\d{2}', '', text)
+    
+    # Remove standalone numbers (like view counts)
+    text = re.sub(r'\n\s*\d+\s*\n', '\n', text)
+    
+    return text.strip()
 
 # --- 6b) Process Relevance (Local ML Model) ---
 
@@ -340,28 +264,57 @@ def process_relevance():
         if not raw_text or raw_text in ["⚠️ fetch failed", ""]:
             continue
             
-        existing_flag = relevance_col[i] if i < len(relevance_col) else ""
+        existing_flag = str(relevance_col[i]).strip() if i < len(relevance_col) else ""
         
-        # Skip if already flagged manually or by a previous run
-        if existing_flag in ["0", "1", "⚠️ AI failed"]:
+        # RULE: Never overwrite an existing '1'
+        if existing_flag == "1":
             continue
             
         # --- PREDICTION LOGIC ---
         if model_loaded:
             try:
-                # Predict returns an array like [1] or [0]
-                prediction = relevance_model.predict([raw_text])[0]
-                flag = str(prediction)
-                print(f"Row {row_number} → ML Predicted: {flag}")
+                # 1. Clean the text (Critical for accuracy)
+                clean_text = clean_noise_for_prediction(raw_text)
+
+                # 2. Predict using Probability
+                # predict_proba returns [prob_0, prob_1]
+                probs = relevance_model.predict_proba([clean_text])[0]
+                prob_score = probs[1] # The probability it IS relevant (1)
+                
+                # SENSITIVITY: If >35% sure, mark as 1. 
+                # This catches subtle news like the ones you listed.
+                new_flag = "1" if prob_score > 0.35 else "0"
+                
+                # LOGIC: Update if blank OR if upgrading 0 -> 1
+                should_update = False
+                
+                if existing_flag == "":
+                    should_update = True
+                elif existing_flag == "0" and new_flag == "1":
+                    print(f"Row {row_number} → Upgrading 0 to 1 (Score: {prob_score:.2f})")
+                    should_update = True
+                
+                if should_update:
+                    if existing_flag == "":
+                        print(f"Row {row_number} → Predicted: {new_flag} (Score: {prob_score:.2f})")
+                        
+                    updates_relevance.append((row_number, idx_map["Relevance"], new_flag))
+                    updates_runtime.append((row_number, idx_map["RunTime"],
+                                            datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
+                                            
             except Exception as e:
                 print(f"Row {row_number} → Prediction failed: {e}")
-                flag = "0" # Default fallback
+                # If blank and error, default to 0 to keep pipeline moving
+                if existing_flag == "":
+                    updates_relevance.append((row_number, idx_map["Relevance"], "0"))
+                    updates_runtime.append((row_number, idx_map["RunTime"],
+                                            datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
         else:
-            flag = "0" # Default if model file missing
-            
-        updates_relevance.append((row_number, idx_map["Relevance"], flag))
-        updates_runtime.append((row_number, idx_map["RunTime"],
-                                datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
+            # Fallback if model didn't load
+            if existing_flag == "":
+                updates_relevance.append((row_number, idx_map["Relevance"], "0"))
+                updates_runtime.append((row_number, idx_map["RunTime"],
+                                        datetime.now().astimezone(IST).strftime("%I:%M %p · %d %b, %Y")))
         
     batch_update(updates_relevance)
     batch_update(updates_runtime)
