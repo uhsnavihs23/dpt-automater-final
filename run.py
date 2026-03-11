@@ -60,12 +60,27 @@ DOC_TEMPLATE_ID = get_env_var("DOC_TEMPLATE_ID")
 APPS_SCRIPT_URL = get_env_var("APPS_SCRIPT_URL")
 MY_EMAIL = get_env_var("MY_EMAIL")
 
-# Authenticate Google Sheets API (Code remains the same)
+# Authenticate Google Sheets API with Retry Logic
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 try:
     creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
     gc = gspread.authorize(creds)
-    sh = gc.open_by_key(SHEET_KEY)
+    
+    # Attempt to open the sheet with up to 3 retries
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            sh = gc.open_by_key(SHEET_KEY)
+            break  # Exit the loop if successful
+        except gspread.exceptions.APIError as e:
+            print(f"⚠️ Google Sheets API Error on attempt {attempt + 1}: {e}")
+            if attempt < max_retries - 1:
+                print("⏳ Retrying in 10 seconds...")
+                time.sleep(10)
+            else:
+                print("❌ Failed to connect to Google Sheets after multiple attempts.")
+                raise  # Crash the script if it still fails after 3 tries
+
 except Exception as e:
     print(f"⚠️ Google Sheets authentication failed: {e}")
     raise
