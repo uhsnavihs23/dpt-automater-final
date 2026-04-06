@@ -267,7 +267,7 @@ def process_relevance():
     # --- CONFIGURATION ---
     # Increase this to make the model stricter. 
     # 0.75 means it must be 75% sure to flag as '1'.
-    CONFIDENCE_THRESHOLD = 0.75 
+    CONFIDENCE_THRESHOLD = 0.80 
     
     # --- Load the Model ---
     print("🧠 Loading local relevance model from relevance_model.pkl...")
