@@ -165,34 +165,32 @@ MODEL_DOC = "gemini-2.5-flash"
 #     # Create and return the model instance
 #     return genai.GenerativeModel(model_name)
 
-def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, max_retries=4):
+def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, max_retries=8):
     """
-    Handles API calls with key rotation using the new google-genai SDK.
+    Handles API calls with key rotation, detailed logging, and custom 503 cooldowns.
     """
     if not api_key_list:
         print(f"❌ No API keys found for model {model_name}. Skipping call.")
         return ""
 
     for attempt in range(max_retries):
+        # 1. Get the current key based on the reference index
+        current_key_index = key_index_ref[0]
+        api_key = api_key_list[current_key_index]
+        
         try:
-            # 1. Get the current key based on the reference index
-            current_key_index = key_index_ref[0]
-            api_key = api_key_list[current_key_index]
-
-            # 2. Instantiate the new Client (New SDK approach)
+            # 2. Instantiate the Client
             client = genai.Client(api_key=api_key)
 
             # 3. Generate Content
-            # Note: 'contents' replaces the old argument, and we pass the model name here
             resp = client.models.generate_content(
                 model=model_name,
                 contents=prompt
             )
 
-            # 4. Update the global index for the *next* successful call's start
+            # 4. Update the global index for the *next* successful call
             next_index = (key_index_ref[0] + 1) % len(api_key_list)
             
-            # Map back to global variables to persist state across calls
             if api_key_list is api_keys_6b:
                 globals()['key_index_6b'] = next_index
             elif api_key_list is api_keys_6c:
@@ -207,30 +205,37 @@ def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, m
         except Exception as e:
             err_msg = str(e)
             
-            # Error handling adapted for typical HTTP errors wrapped by the new SDK
             if "404" in err_msg and "model" in err_msg.lower():
                 print(f"❌ Model Not Found Error: {model_name}. Check model name.")
                 return ""
             
+            # --- QUOTA EXCEEDED (429) LOGIC ---
             if "429" in err_msg or "Resource exhausted" in err_msg:
-                # Quota Error: Switch key immediately
+                old_idx = key_index_ref[0]
                 key_index_ref[0] = (key_index_ref[0] + 1) % len(api_key_list)
-                print(f"⚠️ Quota exceeded. Switching to key index {key_index_ref[0]} and waiting 60s...")
+                print(f"🔄 [Key {old_idx + 1} Exhausted] Quota hit! Switching to Key {key_index_ref[0] + 1} and waiting 60s...")
                 time.sleep(60)
                 continue
             
-            elif "503" in err_msg or "unavailable" in err_msg.lower():
-                # Service Error: Backoff
-                wait = min(30, 2 ** attempt)
-                print(f"⚠️ Service unavailable (503). Retrying in {wait}s...")
+            # --- SERVICE UNAVAILABLE (503 / 500) LOGIC ---
+            elif "503" in err_msg or "unavailable" in err_msg.lower() or "500" in err_msg:
+                if attempt < 3:
+                    # First 3 retries: Quick backoff (1s, 2s, 4s)
+                    wait = 2 ** attempt
+                    print(f"⚠️ [Key {current_key_index + 1}] Server busy (503). Quick retry in {wait}s (Attempt {attempt+1}/{max_retries})...")
+                else:
+                    # 4th to 8th retries: 60-second cooldown
+                    wait = 60
+                    print(f"⏳ [Key {current_key_index + 1}] Server heavily loaded (503). Cooling down for {wait}s (Attempt {attempt+1}/{max_retries})...")
                 time.sleep(wait)
                 continue
             
+            # --- OTHER ERRORS ---
             else:
-                # Other Errors
-                print(f"⚠️ API call failed (attempt {attempt+1}): {e}")
+                print(f"⚠️ API call failed using Key {current_key_index + 1} (Attempt {attempt+1}/{max_retries}): {e}")
                 time.sleep(2 ** attempt)
 
+    print(f"❌ Call completely failed after {max_retries} attempts.")
     return "" # Fallback on final failure
 
 # --- Helper: Clean Noise (Matches Training Logic) ---
@@ -516,7 +521,7 @@ def categorize_and_clean(news_list):
         api_key_list=api_keys_doc, 
         key_index_ref=key_index_arr,
         model_name=MODEL_DOC, 
-        max_retries=3
+        max_retries=8
     )
     
     return categorized_text
@@ -541,7 +546,7 @@ def final_qc(news_list):
         api_key_list=api_keys_doc, 
         key_index_ref=key_index_arr,
         model_name=MODEL_DOC, 
-        max_retries=3
+        max_retries=8
     )
 
     if qc_text:
