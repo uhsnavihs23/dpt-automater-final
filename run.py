@@ -24,7 +24,7 @@ IST = pytz.timezone("Asia/Kolkata")
 
 # --- GLOBAL CONFIGURATION ---
 MAX_RAW_LEN = 3000
-BATCH_DELAY_SEC = 5 # Increased delay to 5s to respect the new RPM limits (max 15 RPM)
+BATCH_DELAY_SEC = 10 # Increased delay to 5s to respect the new RPM limits (max 15 RPM)
 
 
 def ordinal(n):
@@ -370,7 +370,7 @@ def clean_text(raw_text):
         api_key_list=api_keys_6c, 
         key_index_ref=key_index_arr,
         model_name=MODEL_6C, 
-        max_retries=4
+        max_retries=8
     )
     
     return cleaned or raw_text[:3000] # Fallback to raw text if empty
@@ -450,7 +450,7 @@ def refine_text(cleaned_text):
         api_key_list=api_keys_6d, 
         key_index_ref=key_index_arr,
         model_name=MODEL_6D,
-        max_retries=4
+        max_retries=8
     )
 
     if refined:
