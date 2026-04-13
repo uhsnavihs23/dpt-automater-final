@@ -29,12 +29,23 @@ jobs:
           DOC_TEMPLATE_ID: ${{ secrets.DOC_TEMPLATE_ID }}
           SHEET_KEY: ${{ secrets.SHEET_KEY }}
           MY_EMAIL: ${{ secrets.MY_EMAIL }}
+          
+          # 6B Keys (8 Keys)
           GEMINI_KEY_6B_1: ${{ secrets.GEMINI_KEY_6B_1 }}
           GEMINI_KEY_6B_2: ${{ secrets.GEMINI_KEY_6B_2 }}
           GEMINI_KEY_6B_3: ${{ secrets.GEMINI_KEY_6B_3 }}
           GEMINI_KEY_6B_4: ${{ secrets.GEMINI_KEY_6B_4 }}
+          GEMINI_KEY_6B_5: ${{ secrets.GEMINI_KEY_6B_5 }}
+          GEMINI_KEY_6B_6: ${{ secrets.GEMINI_KEY_6B_6 }}
+          GEMINI_KEY_6B_7: ${{ secrets.GEMINI_KEY_6B_7 }}
+          GEMINI_KEY_6B_8: ${{ secrets.GEMINI_KEY_6B_8 }}
+          
+          # 6C Keys (3 Keys)
           GEMINI_KEY_6C_1: ${{ secrets.GEMINI_KEY_6C_1 }}
           GEMINI_KEY_6C_2: ${{ secrets.GEMINI_KEY_6C_2 }}
+          GEMINI_KEY_6C_3: ${{ secrets.GEMINI_KEY_6C_3 }}
+          
+          # 6D Keys (12 Keys)
           GEMINI_KEY_6D_1: ${{ secrets.GEMINI_KEY_6D_1 }}
           GEMINI_KEY_6D_2: ${{ secrets.GEMINI_KEY_6D_2 }}
           GEMINI_KEY_6D_3: ${{ secrets.GEMINI_KEY_6D_3 }}
@@ -42,7 +53,15 @@ jobs:
           GEMINI_KEY_6D_5: ${{ secrets.GEMINI_KEY_6D_5 }}
           GEMINI_KEY_6D_6: ${{ secrets.GEMINI_KEY_6D_6 }}
           GEMINI_KEY_6D_7: ${{ secrets.GEMINI_KEY_6D_7 }}
+          GEMINI_KEY_6D_8: ${{ secrets.GEMINI_KEY_6D_8 }}
+          GEMINI_KEY_6D_9: ${{ secrets.GEMINI_KEY_6D_9 }}
+          GEMINI_KEY_6D_10: ${{ secrets.GEMINI_KEY_6D_10 }}
+          GEMINI_KEY_6D_11: ${{ secrets.GEMINI_KEY_6D_11 }}
+          GEMINI_KEY_6D_12: ${{ secrets.GEMINI_KEY_6D_12 }}
+          
+          # DOC Keys (3 Keys)
           GEMINI_KEY_DOC_1: ${{ secrets.GEMINI_KEY_DOC_1 }}
           GEMINI_KEY_DOC_2: ${{ secrets.GEMINI_KEY_DOC_2 }}
           GEMINI_KEY_DOC_3: ${{ secrets.GEMINI_KEY_DOC_3 }}
+          
         run: python run.py
