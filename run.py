@@ -24,7 +24,7 @@ IST = pytz.timezone("Asia/Kolkata")
 
 # --- GLOBAL CONFIGURATION ---
 MAX_RAW_LEN = 3000
-BATCH_DELAY_SEC = 10 # Increased delay to 5s to respect the new RPM limits (max 15 RPM)
+BATCH_DELAY_SEC = 3 # Increased delay to 5s to respect the new RPM limits (max 15 RPM)
 
 
 def ordinal(n):
@@ -216,20 +216,16 @@ def call_gemini_with_rotation(prompt, api_key_list, key_index_ref, model_name, m
                 print(f"🔄 [Key {old_idx + 1} Exhausted] Quota hit! Switching to Key {key_index_ref[0] + 1} and waiting 60s...")
                 time.sleep(60)
                 continue
-            
+
             # --- SERVICE UNAVAILABLE (503 / 500) LOGIC ---
             elif "503" in err_msg or "unavailable" in err_msg.lower() or "500" in err_msg:
-                if attempt < 3:
-                    # First 3 retries: Quick backoff (1s, 2s, 4s)
-                    wait = 2 ** attempt
-                    print(f"⚠️ [Key {current_key_index + 1}] Server busy (503). Quick retry in {wait}s (Attempt {attempt+1}/{max_retries})...")
-                else:
-                    # 4th to 8th retries: 60-second cooldown
-                    wait = 60
-                    print(f"⏳ [Key {current_key_index + 1}] Server heavily loaded (503). Cooling down for {wait}s (Attempt {attempt+1}/{max_retries})...")
+                # Slow backoff: Wait 15s, then 30s, then 45s, etc. 
+                # This guarantees we NEVER hit the 15 RPM quota limit while retrying a 503 error.
+                wait = 15 * (attempt + 1)
+                print(f"⚠️ [Key {current_key_index + 1}] Server busy (503). Waiting {wait}s to protect quota (Attempt {attempt+1}/{max_retries})...")
                 time.sleep(wait)
                 continue
-            
+                
             # --- OTHER ERRORS ---
             else:
                 print(f"⚠️ API call failed using Key {current_key_index + 1} (Attempt {attempt+1}/{max_retries}): {e}")
