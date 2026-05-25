@@ -2,27 +2,68 @@ name: Daily UP Political Tracker
 
 on:
   schedule:
-    - cron: '00 12 * * *'  # 12:00 PM UTC + 5:30 = 5:30 PM IST
+    - cron: '00 12 * * *'  # 12:00 PM UTC = 5:30 PM IST (Subject to GitHub load delays)
   workflow_dispatch:       # allow manual trigger too
 
 jobs:
   run-tracker:
     runs-on: ubuntu-latest
+    
+    # Required to allow the GITHUB_TOKEN to read the workflow run history
+    permissions:
+      actions: read 
+
     steps:
+      - name: Check if already run today
+        id: check_run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. If manually triggered, always proceed (bypass the check)
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "Manual execution triggered. Forcing run."
+            echo "skip=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # 2. For cron jobs, check if a successful run already happened today (in IST)
+          TODAY_IST=$(TZ='Asia/Kolkata' date +%Y-%m-%d)
+          
+          # Fetch the creation time of the last successful run for this specific workflow
+          LATEST_RUN_TIME=$(gh run list --workflow "${{ github.workflow }}" --status success --limit 1 --json createdAt --jq '.[0].createdAt')
+          
+          if [ -n "$LATEST_RUN_TIME" ] && [ "$LATEST_RUN_TIME" != "null" ]; then
+            # Convert the UTC timestamp of the latest run to IST
+            LATEST_RUN_DATE_IST=$(TZ='Asia/Kolkata' date -d "$LATEST_RUN_TIME" +%Y-%m-%d)
+            
+            if [ "$TODAY_IST" == "$LATEST_RUN_DATE_IST" ]; then
+              echo "A successful run already happened today ($TODAY_IST IST). Skipping this delayed cron run to prevent duplicates."
+              echo "skip=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+          fi
+          
+          echo "No successful run found for today. Proceeding."
+          echo "skip=false" >> $GITHUB_OUTPUT
+
       - name: Checkout repository
+        if: steps.check_run.outputs.skip != 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
+        if: steps.check_run.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11" # ✅ Use Python 3.11 or later
 
       - name: Install dependencies
+        if: steps.check_run.outputs.skip != 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
   
       - name: Run tracker
+        if: steps.check_run.outputs.skip != 'true'
         env:
           APPS_SCRIPT_URL: ${{ secrets.APPS_SCRIPT_URL }}
           CREDENTIALS_JSON_B64: ${{ secrets.CREDENTIALS_JSON_B64 }}
