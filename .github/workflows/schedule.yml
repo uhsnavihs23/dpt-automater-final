@@ -2,16 +2,21 @@ name: Daily UP Political Tracker
 
 on:
   schedule:
-    - cron: '00 12 * * *'  # 12:00 PM UTC = 5:30 PM IST (Subject to GitHub load delays)
+    - cron: '00 12 * * *'  # 12:00 PM UTC = 5:30 PM IST
   workflow_dispatch:       # allow manual trigger too
+
+# Suppresses the Node.js 20 deprecation warning for GitHub-maintained actions
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   run-tracker:
     runs-on: ubuntu-latest
     
-    # Required to allow the GITHUB_TOKEN to read the workflow run history
+    # REQUIRED PERMISSIONS
     permissions:
-      actions: read 
+      actions: read    # Allows the 'gh' CLI to check workflow run history
+      contents: read   # Allows 'actions/checkout' to actually fetch your code
 
     steps:
       - name: Check if already run today
@@ -19,7 +24,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. If manually triggered, always proceed (bypass the check)
+          # 1. If manually triggered, always proceed
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "Manual execution triggered. Forcing run."
             echo "skip=false" >> $GITHUB_OUTPUT
@@ -29,11 +34,9 @@ jobs:
           # 2. For cron jobs, check if a successful run already happened today (in IST)
           TODAY_IST=$(TZ='Asia/Kolkata' date +%Y-%m-%d)
           
-          # Fetch the creation time of the last successful run for this specific workflow
           LATEST_RUN_TIME=$(gh run list --workflow "${{ github.workflow }}" --status success --limit 1 --json createdAt --jq '.[0].createdAt')
           
           if [ -n "$LATEST_RUN_TIME" ] && [ "$LATEST_RUN_TIME" != "null" ]; then
-            # Convert the UTC timestamp of the latest run to IST
             LATEST_RUN_DATE_IST=$(TZ='Asia/Kolkata' date -d "$LATEST_RUN_TIME" +%Y-%m-%d)
             
             if [ "$TODAY_IST" == "$LATEST_RUN_DATE_IST" ]; then
