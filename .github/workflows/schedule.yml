@@ -5,7 +5,6 @@ on:
     - cron: '00 12 * * *'  # 12:00 PM UTC = 5:30 PM IST
   workflow_dispatch:       # allow manual trigger too
 
-# Suppresses the Node.js 20 deprecation warning for GitHub-maintained actions
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -15,8 +14,8 @@ jobs:
     
     # REQUIRED PERMISSIONS
     permissions:
-      actions: read    # Allows the 'gh' CLI to check workflow run history
-      contents: read   # Allows 'actions/checkout' to actually fetch your code
+      actions: read    
+      contents: read   
 
     steps:
       - name: Check if already run today
@@ -34,7 +33,8 @@ jobs:
           # 2. For cron jobs, check if a successful run already happened today (in IST)
           TODAY_IST=$(TZ='Asia/Kolkata' date +%Y-%m-%d)
           
-          LATEST_RUN_TIME=$(gh run list --workflow "${{ github.workflow }}" --status success --limit 1 --json createdAt --jq '.[0].createdAt')
+          # ✅ FIX: Added --repo "${{ github.repository }}" so it doesn't need a local .git folder
+          LATEST_RUN_TIME=$(gh run list --repo "${{ github.repository }}" --workflow "${{ github.workflow }}" --status success --limit 1 --json createdAt --jq '.[0].createdAt')
           
           if [ -n "$LATEST_RUN_TIME" ] && [ "$LATEST_RUN_TIME" != "null" ]; then
             LATEST_RUN_DATE_IST=$(TZ='Asia/Kolkata' date -d "$LATEST_RUN_TIME" +%Y-%m-%d)
