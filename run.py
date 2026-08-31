@@ -604,6 +604,7 @@ def generate_report():
             drive_service.permissions().create(
                 fileId=doc_id,
                 body={'type': 'user', 'role': 'writer', 'emailAddress': email},
+                sendNotificationEmail=False
                 fields='id'
             ).execute()
             print(f"✅ Shared document with {email}")
