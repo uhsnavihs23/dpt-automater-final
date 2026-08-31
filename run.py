@@ -604,7 +604,7 @@ def generate_report():
             drive_service.permissions().create(
                 fileId=doc_id,
                 body={'type': 'user', 'role': 'writer', 'emailAddress': email},
-                sendNotificationEmail=False
+                sendNotificationEmail=False,
                 fields='id'
             ).execute()
             print(f"✅ Shared document with {email}")
@@ -634,7 +634,8 @@ def generate_report():
     print('----------')
 
     try:
-        resp = requests.post(APPS_SCRIPT_URL, data={"docId": doc_id})
+        # Added the email string to the payload so Apps Script can read it and send HTML emails
+        resp = requests.post(APPS_SCRIPT_URL, data={"docId": doc_id, "email": MY_EMAIL_val})
         print("Apps Script processing:", resp.text)
     except Exception as e:
         print(f"⚠️ Apps Script call failed: {e}")
